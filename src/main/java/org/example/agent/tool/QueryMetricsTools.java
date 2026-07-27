@@ -52,7 +52,7 @@ public class QueryMetricsTools {
     }
     
     /**
-     * 查询 Prometheus 活动告警
+         * 查询 Prometheus 活动告警
      * 该工具从 Prometheus 告警系统检索所有当前活动/触发的告警，包括标签、注释、状态和值
      */
     @Tool(description = "Query active alerts from Prometheus alerting system. " +

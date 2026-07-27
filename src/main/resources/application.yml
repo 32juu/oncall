@@ -36,18 +36,18 @@ spring:
     
     # Spring AI MCP 客户端配置
     # 如果使用mock数据，请注释这部分内容
-    mcp:
-      client:
-        enabled: true
-        name: tencent-mcp-server
-        version: 1.0.0
-        request-timeout: 60s
-        type: ASYNC
-        sse:
-          connections:
-            tencent-cls:
-              url: https://mcp-api.tencent-cloud.com
-              sse-endpoint: /sse/92XXXXXXXXb4  # 完整的SSE端点路径
+#    mcp:
+#      client:
+#        enabled: false
+#        name: tencent-mcp-server
+#        version: 1.0.0
+#        request-timeout: 60s
+#        type: ASYNC
+#        sse:
+#          connections:
+#            tencent-cls:
+#              url: https://mcp-api.tencent-cloud.com
+#              sse-endpoint: /sse/92XXXXXXXXb4  # 完整的SSE端点路径
 
 # 阿里云 DashScope Embedding API 配置
 dashscope:
