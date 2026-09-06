@@ -61,7 +61,7 @@
 - [ ] T009 [P] [US1] 写 `AlertClaimServiceTest`（Mockito 单测）于 `src/test/java/org/example/claim/service/AlertClaimServiceTest.java`：认领成功 / 他人占用→40901 / 本人重复→40902 / 已结束→40903 / 不存在或未诊断→40401 / 空参→400
 - [ ] T010 [P] [US1] 写 `AlertClaimControllerTest`（@WebMvcTest）于 `src/test/java/org/example/claim/controller/AlertClaimControllerTest.java`：4 端点 HTTP 状态码与信封；blank operator/alertName → 400
 - [ ] T011 [P] [US1] 写 `AlertDiagnosisRecorderTest`（@DataJpaTest + mock QueryMetricsTools）于 `src/test/java/org/example/claim/service/AlertDiagnosisRecorderTest.java`：从 feed JSON 幂等 upsert 出 DIAGNOSED；对已 IN_PROGRESS 的行**不降级**
-- [ ] T012 [US1] 写 `AlertClaimConcurrencyIT` 于 `src/test/java/org/example/claim/AlertClaimConcurrencyIT.java`：2 线程并发认领同一 DIAGNOSED 告警 → 恰 1 成功 + 1 个 409、无双主（在 H2-MySQL 替身上断言；真库复验见 quickstart §Step F）
+- [ ] T012 [US1] 写 `AlertClaimConcurrencyTest` 于 `src/test/java/org/example/claim/AlertClaimConcurrencyTest.java`：2 线程并发认领同一 DIAGNOSED 告警 → 恰 1 成功 + 1 个 409、无双主（在 H2-MySQL 替身上断言；真库复验见 quickstart §Step F）
 
 ### Implementation for User Story 1
 

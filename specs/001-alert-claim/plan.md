@@ -130,10 +130,10 @@ claim/
 | 边界·不存在/未诊断认领 | `AlertClaimServiceTest.unknownAlert404` + controller 404 | 单测 + @WebMvcTest |
 | 边界·已结束不可认领 | seed RESOLVED → `AlertClaimServiceTest.endedAlert409`（repo 0 行 + 映射 40903） | 单测 + @DataJpaTest |
 | 边界·空参 | `AlertClaimControllerTest.blankOperator400` / `blankAlert400` | @WebMvcTest |
-| 边界·并发双认领恰一人 | `AlertClaimConcurrencyIT`（替身）+ quickstart §Step F（真库手动复验） | 集成 + 手动 |
+| 边界·并发双认领恰一人 | `AlertClaimConcurrencyTest`（替身）+ quickstart §Step F（真库手动复验） | 集成 + 手动 |
 | 边界·重复诊断不撤销认领 | `AlertDiagnosisRecorderTest.reDiagnosisDoesNotDowngrade`（IN_PROGRESS 行经 recorder 后仍 IN_PROGRESS） | 集成(@DataJpaTest) |
 
-新增测试类：`AlertClaimServiceTest`、`AlertRepositoryTest`、`AlertClaimControllerTest`、`AlertDiagnosisRecorderTest`、`AlertClaimConcurrencyIT`。运行 `mvn test` 全绿（免 Docker），`mvn verify` 作为提交门。
+新增测试类：`AlertClaimServiceTest`、`AlertRepositoryTest`、`AlertClaimControllerTest`、`AlertDiagnosisRecorderTest`、`AlertClaimConcurrencyTest`。运行 `mvn test` 全绿（免 Docker），`mvn verify` 作为提交门。
 
 ## 7. 风险与开放问题
 

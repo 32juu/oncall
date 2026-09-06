@@ -10,6 +10,7 @@ import com.alibaba.cloud.ai.graph.streaming.OutputType;
 import com.alibaba.cloud.ai.graph.streaming.StreamingOutput;
 import lombok.Getter;
 import lombok.Setter;
+import org.example.claim.service.AlertDiagnosisRecorder;
 import org.example.service.AiOpsService;
 import org.example.service.ChatService;
 import org.slf4j.Logger;
@@ -45,6 +46,10 @@ public class ChatController {
     
     @Autowired
     private ChatService chatService;
+
+    // R4 接缝：在 /api/ai_ops 调用 supervisor 前记录本次诊断覆盖的告警（不改诊断引擎）
+    @Autowired
+    private AlertDiagnosisRecorder alertDiagnosisRecorder;
 
     // 框架启动时扫描所有标有 @Tool 的方法，封装成工具执行逻辑，存入 ToolCallbackProvider
     @Autowired
@@ -305,6 +310,9 @@ public class ChatController {
 
                 emitter.send(SseEmitter.event().name("message").data(SseMessage.content("正在读取告警并拆解任务...\n")));
                 
+                // R4：把本次诊断面对的活动告警幂等标记为 DIAGNOSED（recorder 内部容错）
+                alertDiagnosisRecorder.recordCurrentAlerts();
+
                 // 调用 AiOpsService 执行分析流程
                 Optional<OverAllState> overAllStateOptional = aiOpsService.executeAiOpsAnalysis(chatModel, toolCallbacks);
 

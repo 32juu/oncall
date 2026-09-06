@@ -21,6 +21,16 @@ milvus:
 
 # Spring AI Alibaba DashScope 配置
 spring:
+  # 告警认领模块持久化：MySQL（开发/生产同一引擎；开发库见 specs/001-alert-claim/quickstart.md）
+  datasource:
+    url: jdbc:mysql://localhost:3306/superbiz?useSSL=false&allowPublicKeyRetrieval=true&serverTimezone=UTC&characterEncoding=utf8
+    username: ${MYSQL_USER:sba}
+    password: ${MYSQL_PASSWORD:sba}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+  jpa:
+    open-in-view: false
+    hibernate:
+      ddl-auto: update  # 开发/演示；生产形态改 validate（见 plan O4）
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:your-api-key-here}  # 从环境变量读取或使用默认值
@@ -71,7 +81,7 @@ rag:
 prometheus:
   base-url: http://localhost:9090
   timeout: 10  # 超时时间（秒）
-  mock-enabled: false  # 是否启用 Mock 模式（用于测试）
+  mock-enabled: true  # 开发默认 true（告警认领演示用固定 mock 告警）；接真实 Prometheus 改 false
 
 # CLS 云日志服务配置
 cls:

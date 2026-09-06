@@ -31,7 +31,7 @@ SuperBizAgent is a Spring Boot (Java 17) system with two AI capabilities, both b
 
 ## Build & Run
 
-Requires `DASHSCOPE_API_KEY` in the environment and a running Milvus instance (default `localhost:19530`).
+Requires `DASHSCOPE_API_KEY` in the environment and a running Milvus instance (default `localhost:19530`). 告警认领（claim）模块另需 **MySQL 8**（默认 `localhost:3306/superbiz`，账号走 `MYSQL_USER`/`MYSQL_PASSWORD` env）：`docker run --name sba-mysql -e MYSQL_ROOT_PASSWORD=root -e MYSQL_DATABASE=superbiz -e MYSQL_USER=sba -e MYSQL_PASSWORD=sba -p 3306:3306 -d mysql:8`（详见 `specs/001-alert-claim/quickstart.md`）。
 
 ```bash
 # Start Milvus (etcd + minio + standalone + attu) via Docker Compose
@@ -53,6 +53,7 @@ There is no test suite (no `src/test`). Verification is manual: hit the endpoint
 - `POST /api/ai_ops` — trigger the multi-agent alert analysis (SSE)
 - `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index
 - `GET /milvus/health` — Milvus health check
+- 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401
 - `POST /api/chat/clear`, `GET /api/chat/session/{id}` — session management
 
 ## Architecture
