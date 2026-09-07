@@ -121,11 +121,9 @@ public class QueryMetricsTools {
     
     /**
      * 构建 Mock 告警数据
-     * 与 aiops-docs 文档中的告警类型对应：
+     * 与 aiops-docs 文档及 claim 演示 / recorder 依赖的告警集对应（实际只造 3 类，非全量 aiops-docs 列表）：
      * - HighCPUUsage: CPU使用率过高
      * - HighMemoryUsage: 内存使用率过高
-     * - HighDiskUsage: 磁盘使用率过高
-     * - ServiceUnavailable: 服务不可用
      * - SlowResponse: 响应时间过长
      */
     private List<SimplifiedAlert> buildMockAlerts() {
