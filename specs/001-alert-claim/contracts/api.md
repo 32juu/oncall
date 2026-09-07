@@ -136,7 +136,7 @@ GET /api/alerts/{alertName}/events
 
 - **P2 抑制窗口**：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`；仅当前负责人可用；窗口独立性（与诊断/级别不联动，见 research R6）。
 - **P3 处置结局**：`POST /api/alerts/{alertName}/resolve`（或 `/close`）body `{operator, action, outcome}` → 触发 `IN_PROGRESS → RESOLVED/CLOSED`，仅当前负责人可用；事件写入 `claim_events.event_type`（已预留枚举位）。
-- **Agent 化**（复用现有工具注册）：若将来要让 planner/SRE 在 chat 里认领，新增 `@Tool`（如 `claimAlert(alertName, operator)`），按 `AGENTS.md` 在 `ChatService.buildMethodToolsArray()` 与 `AiOpsService.buildMethodToolsArray()` **双注册**；方向同 QueryMetricsTools 风格，V1 不做。
+- **Agent 化**（复用现有工具注册）：若将来要让 planner/SRE 在 chat 里认领，新增 `@Tool`（如 `claimAlert(alertName, operator)`），按 `CLAUDE.md`（Tool registration model）在 `ChatService.buildMethodToolsArray()` 与 `AiOpsService.buildMethodToolsArray()` **双注册**；方向同 QueryMetricsTools 风格，V1 不做。
 
 ## 3. 与现有系统的一致性注意
 
