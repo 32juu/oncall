@@ -45,7 +45,7 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 5 个类：repository / service / controller / 并发)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 6 个类：repository / service / controller / recorder / 并发；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
@@ -54,7 +54,7 @@ Tests live under `src/test/java/org/example/` (claim 模块现有 5 个类：rep
 - `POST /api/ai_ops` — trigger the multi-agent alert analysis (SSE)
 - `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index
 - `GET /milvus/health` — Milvus health check
-- 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401
+- 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401。US2 抑制窗口：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`（设置）、`DELETE /api/alerts/{alertName}/suppress?operator=`（取消；幂等）
 - `POST /api/chat/clear`, `GET /api/chat/session/{id}` — session management
 
 ## Architecture
@@ -100,6 +100,7 @@ Tools are wired two ways into each `ReactAgent`:
 - **状态机**：`DIAGNOSED → IN_PROGRESS` 是 V1 唯一合法迁移；RESOLVED/CLOSED 为 P3 预留。**「一条告警至多一个有效认领」由单行状态 + 条件 UPDATE（CAS）保证**，不引入部分唯一索引。
 - **认领** `AlertClaimService.claim`：`@Transactional` 内调 `AlertRepository.claimIfDiagnosed`（`UPDATE alerts SET … WHERE status='DIAGNOSED'`）判受影响行数；返回 1 → 追加 CLAIM 事件并回读视图；返回 0 → re-read 映射 40401 / 40901（携 owner）/ 40902 / 40903。
 - **诊断前置（FR-006 守卫）**：`ChatController.aiOps()` 在跑 supervisor **之前**调 `AlertDiagnosisRecorder.recordCurrentAlerts()` —— 读 `QueryMetricsTools` 的 mock feed，幂等 upsert 成 DIAGNOSED，**绝不降级**已 IN_PROGRESS 的行。认领对象必须是打过 DIAGNOSED 的告警（否则 40401）。
+- **抑制窗口（US2，P2）**：`alerts.suppressed_until` 单列承载一个活动窗口（行内状态哲学延续）；`AlertClaimService.suppress/cancelSuppression` 调 `AlertRepository.setSuppression`（CAS 谓词：`status='IN_PROGRESS' AND claimed_by=:operator AND suppressed_until IS DISTINCT FROM :until`）→ 写 SUPPRESS / SUPPRESS_CANCEL 事件。守卫：until 需晚于当前（40004）、未认领（40904）、非负责人（40905）、已结束（40903）。**惰性失效**：活动性一律 `until > now` 判定，无调度器；抑制期内 recorder **跳过诊断记录**（不刷新 lastDiagnosedAt），到点自动恢复。
 - 契约/设计/验证见 `specs/001-alert-claim/`（spec / plan / contracts / quickstart / checklists）。
 
 ## Gotchas
@@ -110,5 +111,6 @@ Tools are wired two ways into each `ReactAgent`:
 - **`DocumentChunkService` deletes old data** by metadata `_source` before re-indexing a file — path is normalized to forward slashes (`File.separator → "/"`), so keep that convention when querying/deleting by `_source`.
 - **Session state is in-memory** (`ChatController` `ConcurrentHashMap` + `ReentrantLock`, max 6 message pairs per session, sliding window). It is lost on restart. — 对照：claim 状态已落 MySQL、重启不丢，两者是「宪法要求持久化」下的新老之别。
 - **claim 返回真实 HTTP 状态码**（4xx/5xx + body `{code,message,data}`），与遗留 Chat 的「HTTP 200 包错误」是两套风格（有意为之，plan O1 记债）。`AlertClaimException` 的错误码 `code` 整除以 100 即标准 HTTP 状态（40901/100=409）。
+- **Instant 序列化字形漂移**：`WebConfig` 自定义了 Jackson 消息转换器（未关闭 `WRITE_DATES_AS_TIMESTAMPS`）→ HTTP 响应里 `Instant` 实际输出**数值时间戳**（epoch 秒.纳秒，@WebMvcTest 实证），而 `api.md` 示例写 ISO 串（V1 claimedAt 即如此，US2 suppressedUntil 同）。测试断言勿钉死字形（controller 层只断言存在/非空）；若需 ISO 需改 WebConfig（超 claim 切片、全局配置债）。
 - **claim 测试在 H2(`MODE=MySQL`) 替身跑**：DDL 全 ANSI、语义面窄；但并发「恰一人」与跨进程重启的**权威**证据需真 MySQL（quickstart §2 Step F/E），H2 替身不能证跨进程持久。
 - **`/ai_ops` and `/chat_stream`** rely on `OutputType.AGENT_MODEL_STREAMING` / `AGENT_TOOL_FINISHED` etc. from the agent-framework's `StreamingOutput` — don't rename these enum usages without checking the framework version.

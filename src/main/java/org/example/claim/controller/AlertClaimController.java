@@ -7,12 +7,14 @@ import org.example.claim.dto.AlertView;
 import org.example.claim.dto.ApiResponse;
 import org.example.claim.dto.ClaimRequest;
 import org.example.claim.dto.ErrorCode;
+import org.example.claim.dto.SuppressRequest;
 import org.example.claim.entity.AlertStatus;
 import org.example.claim.service.AlertClaimService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -44,6 +46,22 @@ public class AlertClaimController {
                                         @RequestBody(required = false) ClaimRequest request) {
         String operator = (request == null) ? null : request.getOperator();
         return ApiResponse.success(alertClaimService.claim(alertName, operator));
+    }
+
+    /** 设置抑制窗口（US2 FR-009）：仅当前负责人对处理中告警可设；until 必须晚于当前；覆盖式替换 */
+    @PostMapping("/{alertName}/suppress")
+    public ApiResponse<AlertView> suppress(@PathVariable String alertName,
+                                           @RequestBody(required = false) SuppressRequest request) {
+        SuppressRequest req = (request == null) ? new SuppressRequest() : request;
+        return ApiResponse.success(alertClaimService.suppress(alertName, req.getOperator(), req.getUntil()));
+    }
+
+    /** 取消抑制窗口（US2 FR-010）：仅当前负责人可取消；本无窗口视为成功（幂等）。
+     *  operator 缺省放行 null → service 抛 BLANK_OPERATOR(40001)，与 claim 空 body 同构（守卫集中在 service）。 */
+    @DeleteMapping("/{alertName}/suppress")
+    public ApiResponse<AlertView> cancelSuppression(@PathVariable String alertName,
+                                                    @RequestParam(name = "operator", required = false) String operator) {
+        return ApiResponse.success(alertClaimService.cancelSuppression(alertName, operator));
     }
 
     /** 查询单条告警（负责人可见性 FR-003） */

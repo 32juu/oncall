@@ -84,10 +84,19 @@ public class AlertDiagnosisRecorder {
             fresh.setStatus(AlertStatus.DIAGNOSED);
             fresh.setLastDiagnosedAt(now);
             alertRepository.save(fresh);
+        } else if (isActivelySuppressed(existing, now)) {
+            // US2 FR-008：抑制窗口生效期内再次触发不产生新的诊断记录 —— 连诊断时间也不刷新（必要记录保留）。
+            logger.info("告警 {} 处于抑制窗口内（至 {}），跳过本次诊断记录", alertName, existing.getSuppressedUntil());
         } else {
-            // 绝不降级：已认领/已结束的告警保持原状，只刷新诊断时间
+            // 绝不降级：已认领/已结束的告警保持原状，只刷新诊断时间；窗口已过（惰性失效）则自动恢复刷新。
             existing.setLastDiagnosedAt(now);
             alertRepository.save(existing);
         }
+    }
+
+    /** 抑制窗口生效判断：suppressed_until 非空且晚于当前 = 活动中；now >= until 视为已失效（惰性，无需调度器）。 */
+    private boolean isActivelySuppressed(Alert alert, Instant now) {
+        Instant until = alert.getSuppressedUntil();
+        return until != null && until.isAfter(now);
     }
 }

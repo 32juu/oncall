@@ -19,6 +19,7 @@ public class AlertView {
     private String claimedBy;
     private Instant claimedAt;
     private Instant lastDiagnosedAt;
+    private Instant suppressedUntil;
 
     public AlertView() {
     }
@@ -33,11 +34,13 @@ public class AlertView {
     }
 
     public static AlertView from(Alert alert) {
-        return new AlertView(
+        AlertView view = new AlertView(
                 alert.getAlertName(),
                 alert.getStatus(),
                 alert.getClaimedBy(),
                 alert.getClaimedAt(),
                 alert.getLastDiagnosedAt());
+        view.setSuppressedUntil(alert.getSuppressedUntil());
+        return view;
     }
 }

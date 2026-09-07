@@ -13,10 +13,13 @@ public enum ErrorCode {
     BLANK_OPERATOR(40001, "操作人标识不能为空"),
     BLANK_ALERT(40002, "告警标识不能为空"),
     INVALID_STATUS_FILTER(40003, "非法状态过滤值"),
+    INVALID_UNTIL(40004, "抑制结束时刻必须晚于当前时间"),
     ALERT_NOT_FOUND(40401, "告警不存在或尚未被诊断，无法认领"),
     ALERT_ALREADY_CLAIMED(40901, "该告警已被其他负责人接管，无法重复认领"),
     ALERT_SELF_CLAIMED(40902, "该告警已由您负责，无需重复认领"),
     ALERT_ENDED(40903, "该告警已结束，无法认领"),
+    ALERT_NOT_CLAIMED(40904, "仅处理中（已认领）的告警可设置抑制窗口"),
+    SUPPRESS_NOT_OWNER(40905, "仅当前负责人可设置或取消抑制窗口"),
     INTERNAL_ERROR(50000, "服务器内部错误");
 
     private final int code;

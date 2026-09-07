@@ -18,9 +18,11 @@ import org.springframework.test.web.servlet.MockMvc;
 import java.time.Instant;
 import java.util.List;
 
+import static org.hamcrest.Matchers.nullValue;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.ArgumentMatchers.isNull;
 import static org.mockito.Mockito.when;
+import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.delete;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.get;
 import static org.springframework.test.web.servlet.request.MockMvcRequestBuilders.post;
 import static org.springframework.test.web.servlet.result.MockMvcResultMatchers.jsonPath;
@@ -45,6 +47,12 @@ class AlertClaimControllerTest {
         v.setClaimedBy(owner);
         v.setClaimedAt(Instant.now());
         v.setLastDiagnosedAt(Instant.now());
+        return v;
+    }
+
+    private AlertView suppressed(String owner, Instant until) {
+        AlertView v = inProgress(owner);
+        v.setSuppressedUntil(until);
         return v;
     }
 
@@ -138,5 +146,85 @@ class AlertClaimControllerTest {
         mockMvc.perform(get("/api/alerts/HighCPUUsage/events"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.data.events[0].eventType").value("CLAIM"));
+    }
+
+    // ============ US2 抑制窗口 ============
+
+    private static final Instant UNTIL = Instant.parse("2099-01-01T00:00:00Z");
+
+    @Test
+    void suppress_success_returns200AndWindow() throws Exception {
+        when(alertClaimService.suppress(eq("HighCPUUsage"), eq("sre-alice"), eq(UNTIL)))
+                .thenReturn(suppressed("sre-alice", UNTIL));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/suppress")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\",\"until\":\"2099-01-01T00:00:00Z\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.alertName").value("HighCPUUsage"))
+                .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"))
+                // 断言窗口「存在且非空」即可：字形由 WebConfig 的自建 ObjectMapper 决定（数值时间戳/ISO），
+                // 属既有 drift（V1 claimedAt 同 Instant），HTTP 层不该钉死序列化字形。
+                .andExpect(jsonPath("$.data.suppressedUntil").isNotEmpty());
+    }
+
+    @Test
+    void suppress_untilInPast_returns400InvalidUntil() throws Exception {
+        when(alertClaimService.suppress(eq("HighCPUUsage"), eq("sre-alice"), eq(Instant.parse("2000-01-01T00:00:00Z"))))
+                .thenThrow(new AlertClaimException(ErrorCode.INVALID_UNTIL));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/suppress")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\",\"until\":\"2000-01-01T00:00:00Z\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40004));
+    }
+
+    @Test
+    void suppress_notOwner_returns409SuppressNotOwner() throws Exception {
+        when(alertClaimService.suppress(eq("HighCPUUsage"), eq("sre-bob"), eq(UNTIL)))
+                .thenThrow(new AlertClaimException(ErrorCode.SUPPRESS_NOT_OWNER));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/suppress")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-bob\",\"until\":\"2099-01-01T00:00:00Z\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(40905));
+    }
+
+    @Test
+    void suppress_blankUntil_returns400InvalidUntil() throws Exception {
+        when(alertClaimService.suppress(eq("HighCPUUsage"), eq("sre-alice"), isNull()))
+                .thenThrow(new AlertClaimException(ErrorCode.INVALID_UNTIL));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/suppress")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40004));
+    }
+
+    @Test
+    void cancelSuppression_success_returns200AndNullWindow() throws Exception {
+        when(alertClaimService.cancelSuppression(eq("HighCPUUsage"), eq("sre-alice")))
+                .thenReturn(suppressed("sre-alice", null));
+
+        mockMvc.perform(delete("/api/alerts/HighCPUUsage/suppress")
+                        .param("operator", "sre-alice"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.suppressedUntil").value(nullValue()))
+                .andExpect(jsonPath("$.data.status").value("IN_PROGRESS"));
+    }
+
+    @Test
+    void cancelSuppression_missingOperator_returns400BlankOperator() throws Exception {
+        when(alertClaimService.cancelSuppression(eq("HighCPUUsage"), isNull()))
+                .thenThrow(new AlertClaimException(ErrorCode.BLANK_OPERATOR));
+
+        mockMvc.perform(delete("/api/alerts/HighCPUUsage/suppress"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40001));
     }
 }

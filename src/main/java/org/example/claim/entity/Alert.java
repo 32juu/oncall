@@ -37,6 +37,10 @@ public class Alert {
     @Column(name = "claimed_at")
     private Instant claimedAt;
 
+    /** 抑制窗口结束时刻（US2）：非空且晚于当前 → 活动抑制中；惰性失效（now >= until 视为已结束） */
+    @Column(name = "suppressed_until")
+    private Instant suppressedUntil;
+
     @Column(name = "last_diagnosed_at", nullable = false)
     private Instant lastDiagnosedAt;
 

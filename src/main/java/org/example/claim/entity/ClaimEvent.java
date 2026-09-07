@@ -13,8 +13,8 @@ import lombok.Setter;
 import java.time.Instant;
 
 /**
- * 认领/事件历史（表 claim_events），只追加。V1 仅写 CLAIM；
- * event_type 预留 RESOLVE / CLOSE / SUPPRESS（P2/P3，见 contracts §2）。
+ * 认领/事件历史（表 claim_events），只追加。V1 写 CLAIM；US2 写 SUPPRESS / SUPPRESS_CANCEL；
+ * 预留 RESOLVE / CLOSE（P3，见 contracts §2）。
  * 同时承载审计与「诊断→认领→…→结局」时间线（复盘数据源）。
  */
 @Entity
@@ -24,6 +24,8 @@ import java.time.Instant;
 public class ClaimEvent {
 
     public static final String TYPE_CLAIM = "CLAIM";
+    public static final String TYPE_SUPPRESS = "SUPPRESS";
+    public static final String TYPE_SUPPRESS_CANCEL = "SUPPRESS_CANCEL";
 
     @Id
     @GeneratedValue(strategy = GenerationType.IDENTITY)
