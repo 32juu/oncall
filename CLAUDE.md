@@ -4,10 +4,11 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-SuperBizAgent is a Spring Boot (Java 17) system with two AI capabilities, both backed by Alibaba Cloud DashScope (Qwen) models via Spring AI Alibaba:
+SuperBizAgent is a Spring Boot (Java 17) system with two AI capabilities — both backed by Alibaba Cloud DashScope (Qwen) via Spring AI Alibaba — plus one non-AI slice that builds on their output:
 
 1. **RAG Q&A** — upload documents → chunk → embed → store in Milvus → retrieve + generate answers.
 2. **AIOps** — a multi-agent pipeline that analyzes Prometheus alerts and produces a structured Markdown diagnostic report.
+3. **告警认领（claim）责任闭环**（非 AI，V1 新增）— 值班 SRE 认领 AIOps 已诊断的告警：负责人立即可见、防重复接管（先到先得）、MySQL 持久化。详见下 Architecture 与 `specs/001-alert-claim/`。
 
 ## 学习模式（我是来学的，不只是要结果）
 
@@ -44,7 +45,7 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-There is no test suite (no `src/test`). Verification is manual: hit the endpoints below or use `src/main/resources/static/` at `http://localhost:9900`.
+Tests live under `src/test/java/org/example/` (claim 模块现有 5 个类：repository / service / controller / 并发)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
@@ -92,11 +93,22 @@ Tools are wired two ways into each `ReactAgent`:
 
 `MilvusClientFactory.createClient` lazily creates collection `biz` on first connect with fields: `id` (VarChar PK), `vector` (FloatVector), `content` (VarChar), `metadata` (JSON). Vector index is `IVF_FLAT` with `L2` metric.
 
+### 告警认领（claim）责任闭环（V1 新增，独立于 RAG/AIOps）
+
+给「诊断完即结束」补上责任闭环，包 `org.example.claim.*`，走 **MySQL 8** —— 这是本项目首个持久化模块（测试用 H2 `MODE=MySQL` 替身）。表：`alerts`（PK `alert_name`，状态在行内）+ `claim_events`（只追加，审计/时间线）。
+
+- **状态机**：`DIAGNOSED → IN_PROGRESS` 是 V1 唯一合法迁移；RESOLVED/CLOSED 为 P3 预留。**「一条告警至多一个有效认领」由单行状态 + 条件 UPDATE（CAS）保证**，不引入部分唯一索引。
+- **认领** `AlertClaimService.claim`：`@Transactional` 内调 `AlertRepository.claimIfDiagnosed`（`UPDATE alerts SET … WHERE status='DIAGNOSED'`）判受影响行数；返回 1 → 追加 CLAIM 事件并回读视图；返回 0 → re-read 映射 40401 / 40901（携 owner）/ 40902 / 40903。
+- **诊断前置（FR-006 守卫）**：`ChatController.aiOps()` 在跑 supervisor **之前**调 `AlertDiagnosisRecorder.recordCurrentAlerts()` —— 读 `QueryMetricsTools` 的 mock feed，幂等 upsert 成 DIAGNOSED，**绝不降级**已 IN_PROGRESS 的行。认领对象必须是打过 DIAGNOSED 的告警（否则 40401）。
+- 契约/设计/验证见 `specs/001-alert-claim/`（spec / plan / contracts / quickstart / checklists）。
+
 ## Gotchas
 
 - **API key**: injected from `DASHSCOPE_API_KEY` env var (default `your-api-key-here`). `VectorEmbeddingService` fails fast at startup if it's not set.
 - **Vector dimension mismatch risk**: `MilvusConstants.VECTOR_DIM = 1024`, but the comment says "豆包" (Doubao) model while the actual embedding model in `application.yml` is DashScope `text-embedding-v4`. If you switch embedding models, the collection dimension must be recreated to match — Milvus collections are immutable once created, so a dimension change requires dropping `biz` and letting it recreate (see `DropCollection.java`).
 - **Milvus reconnect**: changing schema/collection requires dropping the collection (`biz`) or the persisted `volumes/` data; `MilvusClientFactory` only creates the collection if it doesn't already exist.
 - **`DocumentChunkService` deletes old data** by metadata `_source` before re-indexing a file — path is normalized to forward slashes (`File.separator → "/"`), so keep that convention when querying/deleting by `_source`.
-- **Session state is in-memory** (`ChatController` `ConcurrentHashMap` + `ReentrantLock`, max 6 message pairs per session, sliding window). It is lost on restart.
+- **Session state is in-memory** (`ChatController` `ConcurrentHashMap` + `ReentrantLock`, max 6 message pairs per session, sliding window). It is lost on restart. — 对照：claim 状态已落 MySQL、重启不丢，两者是「宪法要求持久化」下的新老之别。
+- **claim 返回真实 HTTP 状态码**（4xx/5xx + body `{code,message,data}`），与遗留 Chat 的「HTTP 200 包错误」是两套风格（有意为之，plan O1 记债）。`AlertClaimException` 的错误码 `code` 整除以 100 即标准 HTTP 状态（40901/100=409）。
+- **claim 测试在 H2(`MODE=MySQL`) 替身跑**：DDL 全 ANSI、语义面窄；但并发「恰一人」与跨进程重启的**权威**证据需真 MySQL（quickstart §2 Step F/E），H2 替身不能证跨进程持久。
 - **`/ai_ops` and `/chat_stream`** rely on `OutputType.AGENT_MODEL_STREAMING` / `AGENT_TOOL_FINISHED` etc. from the agent-framework's `StreamingOutput` — don't rename these enum usages without checking the framework version.
