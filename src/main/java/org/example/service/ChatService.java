@@ -10,6 +10,7 @@ import org.example.agent.tool.InternalDocsTools;
 import org.example.agent.tool.QueryLogsTools;
 import org.example.agent.tool.QueryMetricsTools;
 import org.example.claim.tool.ClaimAlertTool;
+import org.example.claim.tool.SuppressAlertTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
@@ -45,6 +46,9 @@ public class ChatService {
 
     @Autowired(required = false)  // 认领写工具：agent.claim-tool-enabled=true 才注册（D3 默认拒绝）；只接聊天 agent（认领=人工接管，AIOps 不接）
     private ClaimAlertTool claimAlertTool;
+
+    @Autowired(required = false)  // 抑制窗口写工具（suppressAlert/cancelSuppression）：与认领同闸、同 operator、同 chat-only 原则
+    private SuppressAlertTool suppressAlertTool;
 
     @Autowired
     private ToolCallbackProvider tools;
@@ -104,6 +108,12 @@ public class ChatService {
             // claim-tool-enabled=true：向模型显式路由认领动作（否则模型可能只调用提示词中点名的工具）
             systemPromptBuilder.append("当用户要认领（我来处理/接手）某条告警时，使用 claimAlert 工具，以本工位值班负责人名义认领，无需向用户索要负责人。\n");
         }
+        if (suppressAlertTool != null) {
+            // 抑制窗口路由：设窗/取消是同一个 property 闸，与 claimAlert 同时出现
+            systemPromptBuilder.append("当用户要抑制某条告警（如「抑制 HighCPUUsage 2小时」「先静默一下」）时，使用 suppressAlert 工具；"
+                    + "当用户要取消抑制、恢复某条告警的提醒时，使用 cancelSuppression 工具。"
+                    + "until 给相对时长（如 2h、90m、1d）或具体 ISO 时刻即可。\n");
+        }
         systemPromptBuilder.append("\n");
         
         // 添加历史消息
@@ -129,7 +139,7 @@ public class ChatService {
     /**
      * 动态构建方法工具数组
      * 固定工具：dateTime / internalDocs / queryMetrics；
-     * 条件工具：queryLogsTools（cls.mock-enabled）与 claimAlertTool（agent.claim-tool-enabled）按需追加。
+     * 条件工具：queryLogsTools（cls.mock-enabled）、claimAlertTool 与 suppressAlertTool（agent.claim-tool-enabled）按需追加。
      */
     public Object[] buildMethodToolsArray() {
         List<Object> tools = new ArrayList<>(List.of(dateTimeTools, internalDocsTools, queryMetricsTools));
@@ -140,6 +150,10 @@ public class ChatService {
         if (claimAlertTool != null) {
             // claim-tool-enabled=true 时包含认领工具（默认缺省关，行为与关闭前一致）
             tools.add(claimAlertTool);
+        }
+        if (suppressAlertTool != null) {
+            // 与认领同一 property 闸：抑制工具随 claim 工具一起开关
+            tools.add(suppressAlertTool);
         }
         return tools.toArray();
     }
