@@ -1,5 +1,6 @@
 package org.example.claim.tool;
 
+import org.example.agent.tool.ToolLevel;
 import org.example.claim.dto.AlertClaimException;
 import org.example.claim.dto.AlertView;
 import org.example.claim.service.AlertClaimService;
@@ -28,6 +29,7 @@ import org.springframework.stereotype.Component;
  */
 @Component
 @ConditionalOnProperty(name = "agent.claim-tool-enabled", havingValue = "true")
+@ToolLevel(ToolLevel.Level.WRITE)  // D2 分级：认领会改状态 → 只进聊天槽位（ToolRegistry.readOnlyOnly 会把它从 AIOps 过滤掉）
 public class ClaimAlertTool {
 
     private static final Logger logger = LoggerFactory.getLogger(ClaimAlertTool.class);

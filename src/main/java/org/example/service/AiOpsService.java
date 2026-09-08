@@ -9,6 +9,7 @@ import org.example.agent.tool.DateTimeTools;
 import org.example.agent.tool.InternalDocsTools;
 import org.example.agent.tool.QueryLogsTools;
 import org.example.agent.tool.QueryMetricsTools;
+import org.example.agent.tool.ToolRegistry;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.chat.messages.AssistantMessage;
@@ -40,6 +41,9 @@ public class AiOpsService {
     @Autowired(required = false)  // Mock 模式下才注册
     private QueryLogsTools queryLogsTools;
 
+    @Autowired  // 权限闸：AIOps 槽位只读——把全局扫描里的 WRITE/HIGH_RISK 工具（认领/抑制等写工具）在此滤掉
+    private ToolRegistry toolRegistry;
+
     /**
      * 执行 AI Ops 告警分析流程
      *
@@ -51,9 +55,16 @@ public class AiOpsService {
     public Optional<OverAllState> executeAiOpsAnalysis(DashScopeChatModel chatModel, ToolCallback[] toolCallbacks) throws GraphRunnerException {
         logger.info("开始执行 AI Ops 多 Agent 协作流程");
 
-        // 构建 Planner 和 Executor Agent
-        ReactAgent plannerAgent = buildPlannerAgent(chatModel, toolCallbacks);
-        ReactAgent executorAgent = buildExecutorAgent(chatModel, toolCallbacks);
+        // D3/D2 权限闸：AIOps 槽位只读——全局 ToolCallbackProvider 在 agent.claim-tool-enabled=true 时会扫入认领/抑制
+        // WRITE 工具（人工接管工具），在此按 @ToolLevel 过滤为 READ_ONLY，杜绝 AIOps 无人值守自动认领/写状态
+        ToolCallback[] readOnlyCallbacks = toolRegistry.readOnlyOnly(toolCallbacks);
+        logger.info("AIOps 工具权限闸：入参 {} 个工具回调 → 滤除写/高危后保留 {} 个 READ_ONLY",
+                toolCallbacks == null ? 0 : toolCallbacks.length,
+                readOnlyCallbacks == null ? 0 : readOnlyCallbacks.length);
+
+        // 构建 Planner 和 Executor Agent（只拿 READ_ONLY 工具）
+        ReactAgent plannerAgent = buildPlannerAgent(chatModel, readOnlyCallbacks);
+        ReactAgent executorAgent = buildExecutorAgent(chatModel, readOnlyCallbacks);
 
         // 构建 Supervisor Agent
         SupervisorAgent supervisorAgent = SupervisorAgent.builder()
