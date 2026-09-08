@@ -6,7 +6,7 @@
 
 ## 0. 一句话坐标
 
-**「告警认领」这条竖线已超额走完（计划排在 W2、产物链验收在 W3），但横向的 RBAC / 真实数据源 / Playbook / 多模态 / CI / MCP 仍未铺开。** 课程 Phase 文档只到 MCP（Phase1-3）；上下文管理优化、多模态、Evaluation 在其后，仓库内唯一给出周槽位的是下方执行文档尺。
+**「告警认领」竖线已超额走完（计划 W2、产物链验收 W3），多模态切片1（图片入 RAG）已完成（1aa727c）；横向的 RBAC / 真实数据源 / Playbook / 对话多模态 / CI / MCP 仍待铺开。** 课程 Phase 文档只到 MCP（Phase1-3）；上下文管理优化、多模态剩余、Evaluation 在其后，仓库内唯一给出周槽位的是下方执行文档尺。
 
 ---
 
@@ -21,7 +21,7 @@
 | W2 | **工具分级 ToolLevel + ToolRegistry** | @ToolLevel + readOnlyOnly 只读闸 | ✅ 代码落地 | 4050644 + b3b156e（注：无 principal 层 → RBAC 仍是债） |
 | W2 | RBAC 权限（§5.1） | Spring Security+JWT / 文档/接口/工具级隔离 | ❌ 未开始 | 复盘 §5 记为 out-of-scope 债；缺 identity/principal 层 |
 | W2 | 真实 Prometheus / CLS | QueryMetricsTools 接真源 / QueryLogsTools→MCP | ❌ mock 仍在 | 接 MCP 是 Phase3 落地口（见 §2） |
-| W2 | 多模态上传解析（§5.4） | /api/upload 收图 → Qwen-VL → 进诊断 | ❌ 未开始 | 距最近的一个独立切片 |
+| W2 | 多模态（§5.4） | 知识库切片：/api/upload 收图 → Qwen-VL → Markdown 入 RAG（对话/InternalDocs 可检索） | ✅ 切片1 | 1aa727c（`specs/002-image-rag/`；对话直贴图 = 候选切片2，见 §3） |
 | W3 | Playbook（§5.3） | SRE 事件生命周期状态机 + 报告模板 | ❌ 未开始 | claim 责任环 ≠ AIOps 编排改造 |
 | W3 | 六件套实例 | CLAUDE.md / Skill / SubAgent / MCP / Hooks / Plugin | ◐ 仅 CLAUDE.md + SDD skill | .claude/agents、hooks、.mcp.json、plugin 均不存在 |
 | W3 | CI/CD | PR 流水线 + CD + headless | ❌ 未开始 | 无 .github/workflows |
@@ -47,11 +47,11 @@
 
 | 话题 | 槽位 | 前置 | 最小切片拆分 | 当前态 | 距离（按切片） |
 |---|---|---|---|---|---|
-| **多模态** | Phase1 §5.4 / W2 验收：上传截图产出解析并进诊断链路 | 无强依赖（与 RBAC 并列） | ①开发侧：Claude 原生 vision 直贴截图（≈0，演示）②产品侧：/api/upload 收图 → DashScope Qwen-VL 描述 → 进 AIOps/RAG | 零 | **1 切片**（≈1 session），最近 |
+| **多模态** | Phase1 §5.4 / W2 验收：上传截图产出解析并进链路 | 无强依赖（与 RBAC 并列） | ①知识库：/api/upload 收图 → Qwen-VL 描述入 RAG（✅ 1aa727c）②对话直贴图：形态 B=图转述进文本 agent（稳）/ 形态 A=纯 VL 看图问答 ③进 AIOps 诊断链路 | 切片1 ✅ | ①已完成；②③后续候选（②与 ①同构、风险最低） |
 | **上下文管理优化** | Harness「上下文精细化」（W4 Redis 验收） | ②要 Redis 实例；③要 Playbook 先存在（§5.3） | ①工具结果截断（ToolRegistry 配套，独立）②会话迁 Redis + 超阈值转摘要（消 6 轮滑动窗债）③Playbook 移出 system prompt | 零（截断位预留） | ①≈0.5 切片可提前；全套在其后 **≈4-6 切片** |
 | **Evaluation** | Harness「评估与观察」（W4 末：评估集 ≥20 例 + LLM-as-judge/规则校验 + 可观测） | 依赖真实告警源/真实工具（现全 mock）、有标注数据 | ①热身：以 recorder mock feed + 报告模板完整性做规则校验②正式：历史告警集 + 标注根因 + LLM-as-judge | 零 | 殿后，**≥4-6 切片 + 数据准备** |
 
-**推荐到达顺序**：多模态（现在）→ [RBAC / MCP 真实数据源] → 上下文管理优化 → Evaluation。
+**推荐到达顺序**：多模态切片1（图片入 RAG，2026-09-08 已完成）→ [RBAC / MCP 真实数据源] → 上下文管理优化 → Evaluation；对话直贴图（切片2，形态 B 优先）可视面试演示目标插在 RBAC 前后。
 
 ---
 
@@ -70,3 +70,4 @@
 - **ChatController / 旧 Chat 双 HTTP 风格**：claim 真 4xx/5xx vs 遗留 200 包错（plan O1）。
 - **Instant 序列化字形漂移**：HTTP 输出数值时间戳，测试勿钉 ISO（WebConfig 全局债）。
 - **executor 只执行首步 / 单线编排**：supervisor 循环无重试回退（Harness 执行编排改造位）。
+- **原生 PDF/Office 文档解析（语料扩宽）**：RAG 只吃 txt/md + 图片，真实文档（PDF/Word/PPT）进不了知识库——与多模态无关的既有缺口，独立切片（图片管道跑通后只换「前置抽文/看图」入口）。

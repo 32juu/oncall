@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SuperBizAgent is a Spring Boot (Java 17) system with two AI capabilities — both backed by Alibaba Cloud DashScope (Qwen) via Spring AI Alibaba — plus one non-AI slice that builds on their output:
 
-1. **RAG Q&A** — upload documents → chunk → embed → store in Milvus → retrieve + generate answers.
+1. **RAG Q&A** — upload `.txt`/`.md` → chunk → embed → store in Milvus → retrieve + generate answers；**多模态（`specs/002-image-rag/`）**：上传图片（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown → 走同一索引管道，聊天可检索到图内内容。
 2. **AIOps** — a multi-agent pipeline that analyzes Prometheus alerts and produces a structured Markdown diagnostic report.
 3. **告警认领（claim）责任闭环**（非 AI，V1 新增）— 值班 SRE 认领 AIOps 已诊断的告警：负责人立即可见、防重复接管（先到先得）、MySQL 持久化。详见下 Architecture 与 `specs/001-alert-claim/`。
 
@@ -45,14 +45,14 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；US3 处置终局覆盖在 AlertClaimServiceTest / AlertClaimControllerTest / AlertDispositionRepositoryTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；US3 处置终局覆盖在 AlertClaimServiceTest / AlertClaimControllerTest / AlertDispositionRepositoryTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)；RAG 侧多模态图片解析（2026-09-08 切片）另有 ImageCaptionServiceTest / VectorIndexServiceTest / FileUploadControllerTest 3 类)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
 - `POST /api/chat` — non-streaming chat (ReactAgent with tool calling)
 - `POST /api/chat_stream` — SSE streaming chat
 - `POST /api/ai_ops` — trigger the multi-agent alert analysis (SSE)
-- `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index
+- `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index；**亦收图片**（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown → 同管道入 RAG。语义差别：txt 索引失败仍 200（文件本身是内容源）；**图片解析/入库失败返回 HTTP 500 信封**（无解析文本即无可入库内容，假 200 会误导演示），文件已保存未入库
 - `GET /milvus/health` — Milvus health check
 - 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401。US2 抑制窗口：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`（设置）、`DELETE /api/alerts/{alertName}/suppress?operator=`（取消；幂等）。US3 处置终局：`POST /api/alerts/{alertName}/disposition` body `{operator, outcome, action?}`——负责人对处理中告警记处置并进终态（outcome ∈ RESOLVED|CLOSED，一次调用即终局，无「观察中」中间态；action ≤ 500 字，落入事件 note）
 - `POST /api/chat/clear`, `GET /api/chat/session/{id}` — session management
@@ -62,6 +62,8 @@ Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：rep
 ### RAG pipeline
 
 `FileUploadController` → `VectorIndexService.indexSingleFile` → `DocumentChunkService` (splits on Markdown headings then paragraph boundaries, 800-char chunks with 100-char overlap) → `VectorEmbeddingService` (DashScope `text-embedding-v4`) → Milvus insert.
+
+**文本与图片共用一条索引缝**：`VectorIndexService.indexParsedText(sourceId, text)`（内部 `indexText` = delete→chunk→embed→insert；`indexSingleFile` = 读文件后调它）。图片分支先 `ImageCaptionService.caption`（`VisionModelConfig` 的 qwen-vl bean，`UserMessage+Media` 桥，见 Gotchas）把图转成可检索 Markdown 再走此缝，`_source` = 图片路径。设计见 `specs/002-image-rag/`。
 
 Retrieval: `VectorSearchService.searchSimilarDocuments` embeds the query and runs an L2-distance search against collection `biz` (top-K default 3). Both `RagService` (plain Qwen completion) and `InternalDocsTools` (an agent tool) consume this same retrieval path.
 
@@ -121,3 +123,4 @@ Tools are wired two ways into each `ReactAgent`:
 - **Instant 序列化字形漂移**：`WebConfig` 自定义了 Jackson 消息转换器（未关闭 `WRITE_DATES_AS_TIMESTAMPS`）→ HTTP 响应里 `Instant` 实际输出**数值时间戳**（epoch 秒.纳秒，@WebMvcTest 实证），而 `api.md` 示例写 ISO 串（V1 claimedAt 即如此，US2 suppressedUntil 同）。测试断言勿钉死字形（controller 层只断言存在/非空）；若需 ISO 需改 WebConfig（超 claim 切片、全局配置债）。
 - **claim 测试在 H2(`MODE=MySQL`) 替身跑**：DDL 全 ANSI、语义面窄；但并发「恰一人」与跨进程重启的**权威**证据需真 MySQL（quickstart §2 Step F/E），H2 替身不能证跨进程持久。
 - **`/ai_ops` and `/chat_stream`** rely on `OutputType.AGENT_MODEL_STREAMING` / `AGENT_TOOL_FINISHED` etc. from the agent-framework's `StreamingOutput` — don't rename these enum usages without checking the framework version.
+- **多模态图片解析（2026-09-08 切片）**：视觉 bean = `VisionModelConfig` 的 `@Bean("visionChatModel")`（DashScope qwen-vl，暴露接口型 `ChatModel` 便于 mock）；模型用 `spring.ai.dashscope.vision.model` 切换（qwen-vl-max 通用 / qwen-vl-ocr 文档扫描更强）。**传图给模型有框架坑**：Spring AI 1.1.0 的 `UserMessage` 没有 `(text, List<Media>)` 构造器，须走 `UserMessage.builder().text(...).media(Media.builder().mimeType(...).data(bytes).build()).build()`；`Media`/`MediaContent` 在 `org.springframework.ai.content`（spring-ai-commons 模块）。读回文本：`response.getResult().getOutput().getText()`。发图**零 pom 改动**（DashScopeChatModel 已把 UserMessage.media 转 `data:...;base64`，jar 实证）。
