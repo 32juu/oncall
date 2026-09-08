@@ -9,6 +9,7 @@ import org.example.agent.tool.DateTimeTools;
 import org.example.agent.tool.InternalDocsTools;
 import org.example.agent.tool.QueryLogsTools;
 import org.example.agent.tool.QueryMetricsTools;
+import org.example.claim.tool.ClaimAlertTool;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 import org.springframework.ai.tool.ToolCallback;
@@ -17,6 +18,7 @@ import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -40,6 +42,9 @@ public class ChatService {
 
     @Autowired(required = false)  // Mock 模式下才注册，所以设置为 optional,真实环境通过mcp配置注入
     private QueryLogsTools queryLogsTools;
+
+    @Autowired(required = false)  // 认领写工具：agent.claim-tool-enabled=true 才注册（D3 默认拒绝）；只接聊天 agent（认领=人工接管，AIOps 不接）
+    private ClaimAlertTool claimAlertTool;
 
     @Autowired
     private ToolCallbackProvider tools;
@@ -94,7 +99,12 @@ public class ChatService {
         systemPromptBuilder.append("当用户询问时间相关问题时，使用 getCurrentDateTime 工具。\n");
         systemPromptBuilder.append("当用户需要查询公司内部文档、流程、最佳实践或技术指南时，使用 queryInternalDocs 工具。\n");
         systemPromptBuilder.append("当用户需要查询 Prometheus 告警、监控指标或系统告警状态时，使用 queryPrometheusAlerts 工具。\n");
-        systemPromptBuilder.append("当用户需要查询腾讯云日志时，请调用腾讯云mcp服务查询,默认查询地域ap-guangzhou,查询时间范围为近一个月。\n\n");
+        systemPromptBuilder.append("当用户需要查询腾讯云日志时，请调用腾讯云mcp服务查询,默认查询地域ap-guangzhou,查询时间范围为近一个月。\n");
+        if (claimAlertTool != null) {
+            // claim-tool-enabled=true：向模型显式路由认领动作（否则模型可能只调用提示词中点名的工具）
+            systemPromptBuilder.append("当用户要认领（我来处理/接手）某条告警时，使用 claimAlert 工具，以本工位值班负责人名义认领，无需向用户索要负责人。\n");
+        }
+        systemPromptBuilder.append("\n");
         
         // 添加历史消息
         if (!history.isEmpty()) {
@@ -118,16 +128,20 @@ public class ChatService {
 
     /**
      * 动态构建方法工具数组
-     * 根据 cls.mock-enabled 决定是否包含 QueryLogsTools
+     * 固定工具：dateTime / internalDocs / queryMetrics；
+     * 条件工具：queryLogsTools（cls.mock-enabled）与 claimAlertTool（agent.claim-tool-enabled）按需追加。
      */
     public Object[] buildMethodToolsArray() {
+        List<Object> tools = new ArrayList<>(List.of(dateTimeTools, internalDocsTools, queryMetricsTools));
         if (queryLogsTools != null) {
             // Mock 模式：包含 QueryLogsTools
-            return new Object[]{dateTimeTools, internalDocsTools, queryMetricsTools, queryLogsTools};
-        } else {
-            // 真实模式：不包含 QueryLogsTools（由 MCP 提供日志查询功能）
-            return new Object[]{dateTimeTools, internalDocsTools, queryMetricsTools};
+            tools.add(queryLogsTools);
         }
+        if (claimAlertTool != null) {
+            // claim-tool-enabled=true 时包含认领工具（默认缺省关，行为与关闭前一致）
+            tools.add(claimAlertTool);
+        }
+        return tools.toArray();
     }
 
     /**

@@ -86,3 +86,8 @@ prometheus:
 # CLS 云日志服务配置
 cls:
   mock-enabled: false  # 是否启用 Mock 模式（用于测试，设为 true 返回与告警关联的模拟日志数据）
+
+# claimAlert 聊天工具（认领告警）配置
+agent:
+  claim-tool-enabled: false  # 写工具缺省不注册（宪法「高危默认拒绝」）；true 才进聊天 agent，AIOps 不接（认领=人工接管）
+  claim-operator:            # 部署级值班负责人（D4，非模型自报）；空 = 无人被绑定，工具被调用会拒绝。账号/RBAC 归后续切片，此处 V1 占位
