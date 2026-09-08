@@ -2,6 +2,7 @@ package org.example.controller;
 
 import org.example.config.FileUploadConfig;
 import org.example.dto.FileUploadRes;
+import org.example.service.ImageCaptionService;
 import org.example.service.VectorIndexService;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -19,6 +20,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Arrays;
 import java.util.List;
+import java.util.Set;
 
 @RestController
 public class FileUploadController {
@@ -30,6 +32,12 @@ public class FileUploadController {
 
     @Autowired
     private VectorIndexService vectorIndexService;
+
+    @Autowired
+    private ImageCaptionService imageCaptionService;
+
+    /** 多模态白名单：/api/upload 收这些扩展名的图片 → Qwen-VL 看图出 Markdown → 入 RAG（application.yml 同步放行） */
+    private static final Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "webp");
 
     @PostMapping(value = "/api/upload", consumes = "multipart/form-data")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
@@ -68,15 +76,32 @@ public class FileUploadController {
 
             logger.info("文件上传成功: {}", filePath);
 
-            // 文件上传成功后，自动调用向量索引服务
-            try {
-                logger.info("开始为上传文件创建向量索引: {}", filePath);
-                vectorIndexService.indexSingleFile(filePath.toString());
-                logger.info("向量索引创建成功: {}", filePath);
-            } catch (Exception e) {
-                logger.error("向量索引创建失败: {}, 错误: {}", filePath, e.getMessage(), e);
-                // 注意：即使索引失败，文件上传仍然成功，只是记录错误日志
-                // 可以根据业务需求决定是否要删除文件或返回错误
+            // 文件上传成功后，自动建索引：图片 = 多模态新分支；txt/md = 原文本索引（语义不变）
+            if (isImageExtension(fileExtension)) {
+                // 图片若解析/入库失败就没有任何内容可进库，假 200 会误导演示 → 诚实报 500（文件已落盘保留，便于排查）
+                try {
+                    byte[] imageBytes = Files.readAllBytes(filePath);
+                    String caption = imageCaptionService.caption(originalFilename, imageBytes, imageMimeType(fileExtension));
+                    vectorIndexService.indexParsedText(filePath.toString(), caption);
+                    logger.info("图片解析并索引成功: {}, 文本 {} 字符", filePath, caption.length());
+                } catch (Exception e) {
+                    logger.error("图片解析/入库失败: {}, 错误: {}", filePath, e.getMessage(), e);
+                    ApiResponse<String> errorResponse = new ApiResponse<>();
+                    errorResponse.setCode(500);
+                    errorResponse.setMessage("图片解析或入库失败: " + e.getMessage() + "（文件已保存，未入库）");
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(errorResponse);
+                }
+            } else {
+                try {
+                    logger.info("开始为上传文件创建向量索引: {}", filePath);
+                    vectorIndexService.indexSingleFile(filePath.toString());
+                    logger.info("向量索引创建成功: {}", filePath);
+                } catch (Exception e) {
+                    logger.error("向量索引创建失败: {}, 错误: {}", filePath, e.getMessage(), e);
+                    // 注意：即使索引失败，文件上传仍然成功（txt/md 文件本身仍是内容源），只记录错误日志
+                    // 可以根据业务需求决定是否要删除文件或返回错误
+                }
             }
 
             FileUploadRes response = new FileUploadRes(
@@ -132,6 +157,24 @@ public class FileUploadController {
 
         public void setData(T data) {
             this.data = data;
+        }
+    }
+
+    private boolean isImageExtension(String extension) {
+        return IMAGE_EXTENSIONS.contains(extension);
+    }
+
+    private String imageMimeType(String extension) {
+        switch (extension) {
+            case "jpg":
+            case "jpeg":
+                return "image/jpeg";
+            case "png":
+                return "image/png";
+            case "webp":
+                return "image/webp";
+            default:
+                throw new IllegalArgumentException("不支持的图片扩展名: " + extension);
         }
     }
 

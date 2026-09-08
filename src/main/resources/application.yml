@@ -9,7 +9,7 @@ server:
 file:
   upload:
     path: ./uploads
-    allowed-extensions: txt,md
+    allowed-extensions: txt,md,jpg,jpeg,png,webp  # 图片类型 = 多模态：/api/upload 收图 → Qwen-VL 解析入 RAG（原生 PDF/Office 属另一条语料扩宽切片，见 ROADMAP §5）
 
 milvus:
   host: localhost
@@ -34,6 +34,8 @@ spring:
   ai:
     dashscope:
       api-key: ${DASHSCOPE_API_KEY:your-api-key-here}  # 从环境变量读取或使用默认值
+      vision:
+        model: qwen-vl-max  # 多模态视觉模型（/api/upload 图片解析；qwen-vl-max 通用 / qwen-vl-ocr 文档扫描更强）
       chat:
         options:
           timeout: 180000  # 超时时间180秒（3分钟）

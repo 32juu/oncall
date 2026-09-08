@@ -135,27 +135,48 @@ public class VectorIndexService {
         String content = Files.readString(path);
         logger.info("读取文件: {}, 内容长度: {} 字符", path, content.length());
 
-        // 2. 删除该文件的旧数据（如果存在）
-        deleteExistingData(path.toString());
+        // 2. 复用统一的「文本→索引」缝（delete→chunk→embed→insert），sourceId = 文件路径
+        indexParsedText(path.toString(), content);
+    }
 
-        // 3. 文档分片
-        List<DocumentChunk> chunks = chunkService.chunkDocument(content, path.toString());
-        logger.info("文档分片完成: {} -> {} 个分片", filePath, chunks.size());
+    /**
+     * 索引一段已有文本（多模态 seam：图片解析出的 Markdown 也走此缝入库，sourceId = 图片路径）。
+     * 复用 deleteExistingData / chunkDocument / buildMetadata / insertToMilvus —— 文本与图片共用同一索引管道，
+     * 这是多模态切片相对现有 RAG 的唯一缝。
+     *
+     * @param sourceId 数据源标识（落 metadata._source；文本=文件路径、图片=图片路径），delete 覆盖更新按它匹配
+     * @param text     待索引的完整文本内容
+     * @throws Exception 任一环节失败时抛出（图片分支由 controller 捕 → 500）
+     */
+    public void indexParsedText(String sourceId, String text) throws Exception {
+        indexText(sourceId, text);
+    }
 
-        // 4. 为每个分片生成向量并插入 Milvus
+    /**
+     * delete→chunk→embed→insert 的公共索引体（indexSingleFile 读文件后调用、indexParsedText 直接调用）。
+     */
+    private void indexText(String sourceId, String text) throws Exception {
+        // 1. 删除该 sourceId 的旧数据（如果存在）
+        deleteExistingData(sourceId);
+
+        // 2. 文档分片
+        List<DocumentChunk> chunks = chunkService.chunkDocument(text, sourceId);
+        logger.info("文本分片完成: {} -> {} 个分片", sourceId, chunks.size());
+
+        // 3. 为每个分片生成向量并插入 Milvus
         for (int i = 0; i < chunks.size(); i++) {
             DocumentChunk chunk = chunks.get(i);
-            
+
             try {
                 // 生成向量
                 List<Float> vector = embeddingService.generateEmbedding(chunk.getContent());
 
                 // 构建元数据（包含文件信息）
-                Map<String, Object> metadata = buildMetadata(path.toString(), chunk, chunks.size());
+                Map<String, Object> metadata = buildMetadata(sourceId, chunk, chunks.size());
 
                 // 插入到 Milvus
                 insertToMilvus(chunk.getContent(), vector, metadata, chunk.getChunkIndex());
-                
+
                 logger.info("✓ 分片 {}/{} 索引成功", i + 1, chunks.size());
 
             } catch (Exception e) {
@@ -164,13 +185,14 @@ public class VectorIndexService {
             }
         }
 
-        logger.info("文件索引完成: {}, 共 {} 个分片", filePath, chunks.size());
+        logger.info("索引完成: {}, 共 {} 个分片", sourceId, chunks.size());
     }
 
     /**
      * 删除文件的旧数据（根据 metadata._source）
+     * package-private（非 private）：同包单测 spy 掉以验证 indexParsedText 编排，不触碰真 Milvus。
      */
-    private void deleteExistingData(String filePath) {
+    void deleteExistingData(String filePath) {
         try {
             // 使用统一的路径分隔符（正斜杠）用于Milvus存储，避免表达式解析错误
             // 将系统路径转换为统一格式
@@ -251,8 +273,9 @@ public class VectorIndexService {
 
     /**
      * 插入向量到 Milvus
+     * package-private（非 private）：同包单测 spy 掉以验证 indexParsedText 编排，不触碰真 Milvus。
      */
-    private void insertToMilvus(String content, List<Float> vector, 
+    void insertToMilvus(String content, List<Float> vector,
                                 Map<String, Object> metadata, int chunkIndex) throws Exception {
         try {
             // 确保 collection 已加载
