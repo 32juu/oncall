@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 SuperBizAgent is a Spring Boot (Java 17) system with two AI capabilities — both backed by Alibaba Cloud DashScope (Qwen) via Spring AI Alibaba — plus one non-AI slice that builds on their output:
 
-1. **RAG Q&A** — upload `.txt`/`.md` → chunk → embed → store in Milvus → retrieve + generate answers；**多模态（`specs/002-image-rag/`）**：上传图片（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown → 走同一索引管道，聊天可检索到图内内容。
+1. **RAG Q&A** — upload `.txt`/`.md` → chunk → embed → store in Milvus → retrieve + generate answers；**多模态 + 语料扩宽（2026-09-08 收尾，`specs/002-image-rag/` `specs/003-chat-image/` `specs/004-native-docs/`）**：①知识库经 `/api/upload` 收图片（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown、原生文档（pdf/docx/pptx）→ PDFBox/POI 抽文本，均走同一 `indexParsedText` 缝入 RAG；②**对话直贴图（形态 B）**：聊天 body 带可选图字段 → Qwen-VL 转述成文本塞进文本 agent，agent 看完图照常调 RAG/认领/抑制工具。
 2. **AIOps** — a multi-agent pipeline that analyzes Prometheus alerts and produces a structured Markdown diagnostic report.
 3. **告警认领（claim）责任闭环**（非 AI，V1 新增）— 值班 SRE 认领 AIOps 已诊断的告警：负责人立即可见、防重复接管（先到先得）、MySQL 持久化。详见下 Architecture 与 `specs/001-alert-claim/`。
 
@@ -45,14 +45,14 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；US3 处置终局覆盖在 AlertClaimServiceTest / AlertClaimControllerTest / AlertDispositionRepositoryTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)；RAG 侧多模态图片解析（2026-09-08 切片）另有 ImageCaptionServiceTest / VectorIndexServiceTest / FileUploadControllerTest 3 类)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；US3 处置终局覆盖在 AlertClaimServiceTest / AlertClaimControllerTest / AlertDispositionRepositoryTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)；RAG 侧多模态三切片（2026-09-08 收尾）另有：图片解析 ImageCaptionServiceTest / VectorIndexServiceTest；文档抽文本 DocumentTextExtractorTest（PDFBox/POI 测试内现造 pdf/docx/pptx fixture，离线）；/api/upload 三分支契约 FileUploadControllerTest（图片 caption→indexParsedText / 文档 extract→indexParsedText / txt 原 indexSingleFile，失败 500 vs 吞错 200）；对话直贴图 ChatServiceTest + ChatRequestParseTest（含老报文无图字段向后兼容锁）)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
-- `POST /api/chat` — non-streaming chat (ReactAgent with tool calling)
-- `POST /api/chat_stream` — SSE streaming chat
+- `POST /api/chat` — non-streaming chat (ReactAgent with tool calling)。body 可带**可选**图字段 `imageBase64/imageMimeType/imageFileName`：传图 → Qwen-VL 转述成文本再进文本 agent（形态 B，`specs/003-chat-image/`）——agent 看完图照常调 RAG/认领/抑制工具，转述进 history（跨轮可引用）；**服务端只存转述文本、不存图片二进制**。无图字段行为与旧版一致
+- `POST /api/chat_stream` — SSE streaming chat（链同 `/chat`：同样接受可选 image* 字段）
 - `POST /api/ai_ops` — trigger the multi-agent alert analysis (SSE)
-- `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index；**亦收图片**（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown → 同管道入 RAG。语义差别：txt 索引失败仍 200（文件本身是内容源）；**图片解析/入库失败返回 HTTP 500 信封**（无解析文本即无可入库内容，假 200 会误导演示），文件已保存未入库
+- `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index；**亦收图片**（jpg/jpeg/png/webp）→ Qwen-VL 看图转 Markdown、**亦收原生文档**（pdf/docx/pptx）→ PDFBox/POI 抽文本，两者走同一 `indexParsedText` 缝入 RAG（`specs/002-image-rag/` `specs/004-native-docs/`）。三分支语义差别：txt 索引失败仍 200（文件本身是内容源）；**图片/文档解析或入库失败返回 HTTP 500 信封**（无解析文本即无可入库内容，假 200 会误导演示——如扫描件/图片型 PDF 无文字层），文件已保存未入库
 - `GET /milvus/health` — Milvus health check
 - 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401。US2 抑制窗口：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`（设置）、`DELETE /api/alerts/{alertName}/suppress?operator=`（取消；幂等）。US3 处置终局：`POST /api/alerts/{alertName}/disposition` body `{operator, outcome, action?}`——负责人对处理中告警记处置并进终态（outcome ∈ RESOLVED|CLOSED，一次调用即终局，无「观察中」中间态；action ≤ 500 字，落入事件 note）
 - `POST /api/chat/clear`, `GET /api/chat/session/{id}` — session management
@@ -63,7 +63,7 @@ Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：rep
 
 `FileUploadController` → `VectorIndexService.indexSingleFile` → `DocumentChunkService` (splits on Markdown headings then paragraph boundaries, 800-char chunks with 100-char overlap) → `VectorEmbeddingService` (DashScope `text-embedding-v4`) → Milvus insert.
 
-**文本与图片共用一条索引缝**：`VectorIndexService.indexParsedText(sourceId, text)`（内部 `indexText` = delete→chunk→embed→insert；`indexSingleFile` = 读文件后调它）。图片分支先 `ImageCaptionService.caption`（`VisionModelConfig` 的 qwen-vl bean，`UserMessage+Media` 桥，见 Gotchas）把图转成可检索 Markdown 再走此缝，`_source` = 图片路径。设计见 `specs/002-image-rag/`。
+**文本 / 图片 / 原生文档共用一条索引缝**：`VectorIndexService.indexParsedText(sourceId, text)`（内部 `indexText` = delete→chunk→embed→insert；`indexSingleFile` = 读文件后调它）。图片分支先 `ImageCaptionService.caption`（`VisionModelConfig` 的 qwen-vl bean，`UserMessage+Media` 桥，见 Gotchas）把图转成可检索 Markdown；文档分支先 `DocumentTextExtractor.extract`（pdf=PDFBox / docx,pptx=POI）抽纯文本并 `normalize` 断超长行（防 `DocumentChunkService.chunkSection` 对「单段落超 max-size」不硬切而整块入一个 chunk）；两者再走此缝，`_source` = 文件路径。设计见 `specs/002-image-rag/` `specs/004-native-docs/`。**对话直贴图（形态 B）**：`ChatService.resolveUserTurn` 收 body 可选 image* 字段，复用 `ImageCaptionService` 把图转述成文本塞进现有文本 agent（转述入 session history、跨轮可引用；agent 看完图照常调 RAG/认领/抑制工具）；设计见 `specs/003-chat-image/`。
 
 Retrieval: `VectorSearchService.searchSimilarDocuments` embeds the query and runs an L2-distance search against collection `biz` (top-K default 3). Both `RagService` (plain Qwen completion) and `InternalDocsTools` (an agent tool) consume this same retrieval path.
 
@@ -124,3 +124,5 @@ Tools are wired two ways into each `ReactAgent`:
 - **claim 测试在 H2(`MODE=MySQL`) 替身跑**：DDL 全 ANSI、语义面窄；但并发「恰一人」与跨进程重启的**权威**证据需真 MySQL（quickstart §2 Step F/E），H2 替身不能证跨进程持久。
 - **`/ai_ops` and `/chat_stream`** rely on `OutputType.AGENT_MODEL_STREAMING` / `AGENT_TOOL_FINISHED` etc. from the agent-framework's `StreamingOutput` — don't rename these enum usages without checking the framework version.
 - **多模态图片解析（2026-09-08 切片）**：视觉 bean = `VisionModelConfig` 的 `@Bean("visionChatModel")`（DashScope qwen-vl，暴露接口型 `ChatModel` 便于 mock）；模型用 `spring.ai.dashscope.vision.model` 切换（qwen-vl-max 通用 / qwen-vl-ocr 文档扫描更强）。**传图给模型有框架坑**：Spring AI 1.1.0 的 `UserMessage` 没有 `(text, List<Media>)` 构造器，须走 `UserMessage.builder().text(...).media(Media.builder().mimeType(...).data(bytes).build()).build()`；`Media`/`MediaContent` 在 `org.springframework.ai.content`（spring-ai-commons 模块）。读回文本：`response.getResult().getOutput().getText()`。发图**零 pom 改动**（DashScopeChatModel 已把 UserMessage.media 转 `data:...;base64`，jar 实证）。
+- **文档抽文本依赖 + normalize 硬要求（2026-09-08 收尾）**：pom 增 pdfbox 3.0.3 + poi-ooxml 5.3.0（一条依赖覆盖 docx=XWPF / pptx=XSLF）。`DocumentTextExtractor.normalize` 必须把超长行断到 ≤ ~600 且**保留断点空格**——`DocumentChunkService.chunkSection` 对「单段落超 max-size」**不硬切**（段落按 `\n\n` 切），不断行会把整份文档当一段塞进一个 chunk；断点丢空格会把词粘一起（`cpu usage`→`cpuusage`）检索 token 不命中。`extract` 空文本抛 `IllegalStateException`（扫描件/图片型 PDF 无文字层），FileUploadController 兜 500（同图片哲学）。
+- **聊天直贴图 = base64 只存转述（2026-09-08 切片）**：`/api/chat*` body 带可选 image* 字段时，服务端 decode（容忍 `data:` 前缀）→ mime 白名单 jpg/jpeg/png/webp、解码后 ≤ 4MB，非法抛 IAE → legacy「200 包错误」信封（Chat 旧风格，不实改）。图片只经 Qwen-VL 转述成文本进 agent 与 history，**不存图片二进制**（history 是纯文本结构）。前端选文件/剪贴板粘贴共用 `stageImage` → 预览 chip，发送才带 base64（`buildChatPayload` 剥前缀，quick/stream 两处同构）。

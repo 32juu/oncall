@@ -6,7 +6,7 @@
 
 ## 0. 一句话坐标
 
-**「告警认领」竖线已超额走完（计划 W2、产物链验收 W3），多模态切片1（图片入 RAG）已完成（1aa727c）；横向的 RBAC / 真实数据源 / Playbook / 对话多模态 / CI / MCP 仍待铺开。** 课程 Phase 文档只到 MCP（Phase1-3）；上下文管理优化、多模态剩余、Evaluation 在其后，仓库内唯一给出周槽位的是下方执行文档尺。
+**「告警认领」竖线已超额走完（计划 W2、产物链验收 W3），多模态 + 语料扩宽已收尾（2026-09-08 三切片：图入 RAG `1aa727c` → 对话直贴图 `4d2eeeb`+`e4fae65` → 文档入 RAG `8ab2748`）；横向的 RBAC / 真实数据源 / Playbook / CI / MCP 仍待铺开。** 课程 Phase 文档只到 MCP（Phase1-3）；上下文管理优化、Evaluation 在其后，仓库内唯一给出周槽位的是下方执行文档尺。
 
 ---
 
@@ -14,14 +14,14 @@
 
 | 周 | 阶段 | 关键交付 | 实态 | 证据 |
 |---|---|---|---|---|
-| W1 | Phase 0 | Claude Code 环境 / 重构版 CLAUDE.md / spec-kit 就绪 / ≥10 测试 | ✅ 超额 | CLAUDE.md 已 <200 行演进；spec-kit + speckit-* 全套；**claim 9 测试类 / 全仓 mvn verify 105 绿** |
+| W1 | Phase 0 | Claude Code 环境 / 重构版 CLAUDE.md / spec-kit 就绪 / ≥10 测试 | ✅ 超额 | CLAUDE.md 已 <200 行演进；spec-kit + speckit-* 全套；**claim 9 测试类 / 全仓 mvn verify 139 绿（2026-09-08）** |
 | W1 | 分支+PR 工作流 | feat/* + PR | ⚪ 有意未用 | 直接推 main（学习节奏，PR 待 CI 引入后再开） |
 | W2 | 告警认领模块（SDD 产出） | US1 认领 / US2 抑制 / US3 处置 端到端 | ✅ 全走完 | 06cb634(US1) → 5f94cef(US2) → 03de489+32f17bb(US3)；spec/plan/data-model/contracts/checklists 齐全 |
 | W2 | 认领/抑制 **Agent 化写工具** | claimAlert / suppressAlert /（disposition 未做） | ◐ | fff41cc / 41aa210；chat-only + config-bound + 单测 |
 | W2 | **工具分级 ToolLevel + ToolRegistry** | @ToolLevel + readOnlyOnly 只读闸 | ✅ 代码落地 | 4050644 + b3b156e（注：无 principal 层 → RBAC 仍是债） |
 | W2 | RBAC 权限（§5.1） | Spring Security+JWT / 文档/接口/工具级隔离 | ❌ 未开始 | 复盘 §5 记为 out-of-scope 债；缺 identity/principal 层 |
 | W2 | 真实 Prometheus / CLS | QueryMetricsTools 接真源 / QueryLogsTools→MCP | ❌ mock 仍在 | 接 MCP 是 Phase3 落地口（见 §2） |
-| W2 | 多模态（§5.4） | 知识库切片：/api/upload 收图 → Qwen-VL → Markdown 入 RAG（对话/InternalDocs 可检索） | ✅ 切片1 | 1aa727c（`specs/002-image-rag/`；对话直贴图 = 候选切片2，见 §3） |
+| W2 | 多模态 + 语料扩宽（§5.4） | 知识库收图→VL→入 RAG / 原生文档 pdf·docx·pptx 抽文本入 RAG / 对话直贴图（形态 B） | ✅ 三切片收尾 | 1aa727c(图) → 4d2eeeb+e4fae65(对话贴图) → 8ab2748(文档)；`specs/002`+`003`+`004` |
 | W3 | Playbook（§5.3） | SRE 事件生命周期状态机 + 报告模板 | ❌ 未开始 | claim 责任环 ≠ AIOps 编排改造 |
 | W3 | 六件套实例 | CLAUDE.md / Skill / SubAgent / MCP / Hooks / Plugin | ◐ 仅 CLAUDE.md + SDD skill | .claude/agents、hooks、.mcp.json、plugin 均不存在 |
 | W3 | CI/CD | PR 流水线 + CD + headless | ❌ 未开始 | 无 .github/workflows |
@@ -47,11 +47,11 @@
 
 | 话题 | 槽位 | 前置 | 最小切片拆分 | 当前态 | 距离（按切片） |
 |---|---|---|---|---|---|
-| **多模态** | Phase1 §5.4 / W2 验收：上传截图产出解析并进链路 | 无强依赖（与 RBAC 并列） | ①知识库：/api/upload 收图 → Qwen-VL 描述入 RAG（✅ 1aa727c）②对话直贴图：形态 B=图转述进文本 agent（稳）/ 形态 A=纯 VL 看图问答 ③进 AIOps 诊断链路 | 切片1 ✅ | ①已完成；②③后续候选（②与 ①同构、风险最低） |
+| **多模态 + 语料扩宽** | Phase1 §5.4 / W2 验收 | 无强依赖（与 RBAC 并列） | ①知识库收图→VL 转 Markdown→入 RAG（✅ 1aa727c）②对话直贴图：形态 B=图转述进文本 agent（✅ 4d2eeeb+e4fae65，用户拍板 B）③原生文档 pdf/docx/pptx 抽文本入 RAG（✅ 8ab2748，语料扩宽债收编）④图/文档进 AIOps 诊断链路（未做，需 AIOps 编排改造） | ①②③ 收尾 ✅ | ①②③ 2026-09-08 全完成；④是唯一剩余候选（横切 AIOps，独立评估） |
 | **上下文管理优化** | Harness「上下文精细化」（W4 Redis 验收） | ②要 Redis 实例；③要 Playbook 先存在（§5.3） | ①工具结果截断（ToolRegistry 配套，独立）②会话迁 Redis + 超阈值转摘要（消 6 轮滑动窗债）③Playbook 移出 system prompt | 零（截断位预留） | ①≈0.5 切片可提前；全套在其后 **≈4-6 切片** |
 | **Evaluation** | Harness「评估与观察」（W4 末：评估集 ≥20 例 + LLM-as-judge/规则校验 + 可观测） | 依赖真实告警源/真实工具（现全 mock）、有标注数据 | ①热身：以 recorder mock feed + 报告模板完整性做规则校验②正式：历史告警集 + 标注根因 + LLM-as-judge | 零 | 殿后，**≥4-6 切片 + 数据准备** |
 
-**推荐到达顺序**：多模态切片1（图片入 RAG，2026-09-08 已完成）→ [RBAC / MCP 真实数据源] → 上下文管理优化 → Evaluation；对话直贴图（切片2，形态 B 优先）可视面试演示目标插在 RBAC 前后。
+**推荐到达顺序**：多模态 + 语料扩宽已全部收尾（图入 RAG / 对话直贴图 / 文档入 RAG，2026-09-08）→ 下一站 [RBAC / MCP 真实数据源] → 上下文管理优化 → Evaluation。多模态演示素材已齐（知识库收图收文档 + 聊天直贴图）可随时作面试演示。
 
 ---
 
@@ -70,4 +70,4 @@
 - **ChatController / 旧 Chat 双 HTTP 风格**：claim 真 4xx/5xx vs 遗留 200 包错（plan O1）。
 - **Instant 序列化字形漂移**：HTTP 输出数值时间戳，测试勿钉 ISO（WebConfig 全局债）。
 - **executor 只执行首步 / 单线编排**：supervisor 循环无重试回退（Harness 执行编排改造位）。
-- **原生 PDF/Office 文档解析（语料扩宽）**：RAG 只吃 txt/md + 图片，真实文档（PDF/Word/PPT）进不了知识库——与多模态无关的既有缺口，独立切片（图片管道跑通后只换「前置抽文/看图」入口）。
+- **文档解析剩余（2026-09-08 已收编主体）**：pdf/docx/pptx 抽文本已落地（8ab2748，`specs/004`）；剩 `.xlsx` 与扫描件/图片型 PDF 的 OCR（无文字层→extractor 空→500 诚实报，见 `specs/004` Out of Scope）。
