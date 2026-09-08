@@ -45,7 +45,7 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 8 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 9 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；US3 处置终局覆盖在 AlertClaimServiceTest / AlertClaimControllerTest / AlertDispositionRepositoryTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
@@ -54,7 +54,7 @@ Tests live under `src/test/java/org/example/` (claim 模块现有 8 个类：rep
 - `POST /api/ai_ops` — trigger the multi-agent alert analysis (SSE)
 - `POST /api/upload` — upload a `.txt`/`.md` file, auto-chunk + embed + index
 - `GET /milvus/health` — Milvus health check
-- 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401。US2 抑制窗口：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`（设置）、`DELETE /api/alerts/{alertName}/suppress?operator=`（取消；幂等）
+- 告警认领（claim）模块：`POST /api/alerts/{alertName}/claim`（认领）、`GET /api/alerts`（列表，可按 `?status=` 过滤）、`GET /api/alerts/{alertName}`（负责人可见）、`GET /api/alerts/{alertName}/events`（时间线）。⚠️ 认领对象必须是已跑过 `/api/ai_ops` 的告警（`ChatController.aiOps` 前置 recorder 打 DIAGNOSED）；对未诊断告警认领返回 40401。US2 抑制窗口：`POST /api/alerts/{alertName}/suppress` body `{operator, until}`（设置）、`DELETE /api/alerts/{alertName}/suppress?operator=`（取消；幂等）。US3 处置终局：`POST /api/alerts/{alertName}/disposition` body `{operator, outcome, action?}`——负责人对处理中告警记处置并进终态（outcome ∈ RESOLVED|CLOSED，一次调用即终局，无「观察中」中间态；action ≤ 500 字，落入事件 note）
 - `POST /api/chat/clear`, `GET /api/chat/session/{id}` — session management
 
 ## Architecture
@@ -103,10 +103,11 @@ Tools are wired two ways into each `ReactAgent`:
 
 给「诊断完即结束」补上责任闭环，包 `org.example.claim.*`，走 **MySQL 8** —— 这是本项目首个持久化模块（测试用 H2 `MODE=MySQL` 替身）。表：`alerts`（PK `alert_name`，状态在行内）+ `claim_events`（只追加，审计/时间线）。
 
-- **状态机**：`DIAGNOSED → IN_PROGRESS` 是 V1 唯一合法迁移；RESOLVED/CLOSED 为 P3 预留。**「一条告警至多一个有效认领」由单行状态 + 条件 UPDATE（CAS）保证**，不引入部分唯一索引。
+- **状态机**：`DIAGNOSED → IN_PROGRESS`（claim）与 `IN_PROGRESS → RESOLVED/CLOSED`（US3 disposition，endIfOwner）是两条合法迁移；终态单向——已结束行不可再认领/抑制/处置。**「一条告警至多一个有效认领」由单行状态 + 条件 UPDATE（CAS）保证**，不引入部分唯一索引。
 - **认领** `AlertClaimService.claim`：`@Transactional` 内调 `AlertRepository.claimIfDiagnosed`（`UPDATE alerts SET … WHERE status='DIAGNOSED'`）判受影响行数；返回 1 → 追加 CLAIM 事件并回读视图；返回 0 → re-read 映射 40401 / 40901（携 owner）/ 40902 / 40903。
 - **诊断前置（FR-006 守卫）**：`ChatController.aiOps()` 在跑 supervisor **之前**调 `AlertDiagnosisRecorder.recordCurrentAlerts()` —— 读 `QueryMetricsTools` 的 mock feed，幂等 upsert 成 DIAGNOSED，**绝不降级**已 IN_PROGRESS 的行。认领对象必须是打过 DIAGNOSED 的告警（否则 40401）。
 - **抑制窗口（US2，P2）**：`alerts.suppressed_until` 单列承载一个活动窗口（行内状态哲学延续）；`AlertClaimService.suppress/cancelSuppression` 调 `AlertRepository.setSuppression`（CAS 谓词：`status='IN_PROGRESS' AND claimed_by=:operator AND suppressed_until IS DISTINCT FROM :until`）→ 写 SUPPRESS / SUPPRESS_CANCEL 事件。守卫：until 需晚于当前（40004）、未认领（40904）、非负责人（40905）、已结束（40903）。**惰性失效**：活动性一律 `until > now` 判定，无调度器；抑制期内 recorder **跳过诊断记录**（不刷新 lastDiagnosedAt），到点自动恢复。
+- **处置终局（US3，FR-010/011）**：`AlertClaimService.recordDisposition` 调 `AlertRepository.endIfOwner`（CAS 谓词：`status='IN_PROGRESS' AND claimed_by=:operator`，**顺手清 suppressed_until**）→ 写 RESOLVE/CLOSE 事件带 note（=action，可空，上限 500）。守卫：outcome 须为 RESOLVED/CLOSED（40006）、action>500（40007）、非负责人（40906）、未认领（40904）、已结束（40903）、未知（40401）。事件复用 claim_events（加 note 列），**alerts 零 schema 变更**——单行 CAS 第三次复用。
 - 契约/设计/验证见 `specs/001-alert-claim/`（spec / plan / contracts / quickstart / checklists）。
 
 ## Gotchas

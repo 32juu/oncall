@@ -1,8 +1,8 @@
-# Data Model: 告警认领与处置（V1 认领闭环 + US2 抑制窗口）
+# Data Model: 告警认领与处置（V1 认领闭环 + US2 抑制窗口 + US3 处置结局）
 
 **Branch**: `001-alert-claim` | **Date**: 2026-09-06 | **Spec**: [spec.md](spec.md) | **Research**: [research.md](research.md)
 
-覆盖 V1（FR-001~006，P1）与 **US2 抑制窗口（FR-007~009，P2）**：US2 在 `alerts` 单行上新增 `suppressed_until` 列承载一个活动抑制窗口（行内状态哲学延续，见 §4.2）。P3 处置结局仍仅预留扩展位、不做表字段。
+覆盖 V1（FR-001~006，P1）、**US2 抑制窗口（FR-007~009，P2）** 与 **US3 处置结局（FR-010/011，P3，2026-09-08 实现）**：US2 在 `alerts` 单行上新增 `suppressed_until` 列承载一个活动抑制窗口（行内状态哲学延续，见 §4.2）；US3 **alerts 零 schema 变更**（status 列即结局），仅在 `claim_events` 加可空 `note` 列承载处置动作文案（见 §2.2、§4.3）。
 
 ---
 
@@ -27,14 +27,15 @@
 | updatedAt | TIMESTAMP | NOT NULL | |
 
 ### 2.2 ClaimEvent（认领/事件历史，只追加）
-映射表 `claim_events`。每次写动作的审计轨迹；已写 `CLAIM`（US1）、`SUPPRESS` / `SUPPRESS_CANCEL`（US2）。它是 spec 的「认领记录/时间线」落点，也是 FR-003/复盘（P3）与宪法「写操作可审计」的载体。
+映射表 `claim_events`。每次写动作的审计轨迹；已写 `CLAIM`（US1）、`SUPPRESS` / `SUPPRESS_CANCEL`（US2）、`RESOLVE` / `CLOSE`（US3，携带 note=处置动作文案）。它是 spec 的「认领记录/时间线」落点，也是 FR-003 / 复盘（SC-006，US3 后已可完整支撑）与宪法「写操作可审计」的载体。
 
 | 字段 | 类型 | 约束 | 说明 |
 |---|---|---|---|
 | id | BIGINT | PK，自增 | |
 | alertName | VARCHAR(128) | NOT NULL, FK → alerts.alertName | |
 | operator | VARCHAR(64) | NOT NULL | 动作执行人标识 |
-| eventType | VARCHAR(20) | NOT NULL | 已写: `CLAIM`/`SUPPRESS`/`SUPPRESS_CANCEL`；预留 `RESOLVE/CLOSE` |
+| eventType | VARCHAR(20) | NOT NULL | 已写: `CLAIM`/`SUPPRESS`/`SUPPRESS_CANCEL`/`RESOLVE`/`CLOSE` |
+| note | VARCHAR(500) | NULL | 处置动作文案（US3）：仅 `RESOLVE`/`CLOSE` 事件携带；`CLAIM`/`SUPPRESS` 类事件为 null |
 | createdAt | TIMESTAMP | NOT NULL | |
 
 ## 3. 状态机
@@ -45,7 +46,7 @@
                 claim（本功能，原子条件更新）
   DIAGNOSED ───────────────────────────────▶ IN_PROGRESS
       ▲                                         │
-      │ upsert（recorder，幂等，绝不降级）          │  RESOLVE/CLOSE 由 P3 处置记录实现（V1 不做，仅预留）
+      │ upsert（recorder，幂等，绝不降级）          │  RESOLVE/CLOSE 由 US3 recordDisposition 实现（endIfOwner 原子迁移）
   无行 / 新告警                                  ▼
                                             RESOLVED / CLOSED
 ```
@@ -56,7 +57,7 @@
 |---|---|---|---|
 | (不存在) → DIAGNOSED | recorder 在 ai_ops 入口对 feed 中每个 alert_name 幂等 upsert | ✅ | 仅插入缺失行 / 刷新 lastDiagnosedAt；**不改变已存在行的 status/claimed\***；US2：抑制中的行连刷新也跳过 |
 | DIAGNOSED → IN_PROGRESS | `claim` | ✅ | `UPDATE ... WHERE status='DIAGNOSED'`，受影响行数==1 才算成功 |
-| IN_PROGRESS → RESOLVED/CLOSED | 处置记录（P3） | ⛔ 预留 | 仅当前负责人可发起 |
+| IN_PROGRESS → RESOLVED/CLOSED | 处置记录 `recordDisposition`（US3） | ✅ | `UPDATE ... WHERE status='IN_PROGRESS' AND claimed_by=:operator`（endIfOwner），受影响行数==1 才算成功；顺手清 suppressed_until（结局 = 抑制无意义） |
 | 其它 → 其它 | — | — | 不存在入口即被拦截；claim 的状态谓词天然拒绝所有非 DIAGNOSED 迁移 |
 
 **关键守卫语义（claim 失败分支，均落 REST 错误码）**：
@@ -104,6 +105,21 @@ UPDATE alerts
 - **惰性失效（无调度器）**：活动性一律 `suppressed_until > now` 判定；到点后列保留历史值，后续「判活动性」自然视为已结束，recorder 恢复刷新、不再需要清除任务。设窗口时校验 `until` 必须晚于当前（否则 40004）。
 - **不做部分唯一索引的独立窗口行**：与 §4 同因（H2/MySQL 无通用部分唯一索引）；窗口生命周期由单列 + 覆盖写表达最简。
 
+### 4.3 处置终局 CAS（US3，同一单行原子）
+
+「处理中 → 终态」由 `endIfOwner` 迁移：谓词同认领/抑制（处理中 + 本人负责），并把抑制窗口一并清掉（结局 = 抑制无意义）：
+
+```sql
+UPDATE alerts
+   SET status = :outcome, suppressed_until = NULL, updated_at = :now
+ WHERE alert_name = :alertName AND status = 'IN_PROGRESS' AND claimed_by = :operator;
+```
+
+- `:outcome` 由 service 校验后传入（仅 `RESOLVED`/`CLOSED` 字面；垃圾/非终态 → 40006）。
+- affected==1 → 同事务写 `RESOLVE`/`CLOSE` 事件（note = 处置动作文案，可空、≤ 500 字）。
+- affected==0 → service 回读分类：非本人（但行仍 IN_PROGRESS）→ 40906；未认领（DIAGNOSED）→ 40904；已结束 → 40903；行不存在 → 40401。
+- **终态单向、不复活**：recorder 对 RESOLVED/CLOSED 行不降级，认领/抑制谓词天然拒终态，disposition 亦拒 → 已结束告警没有任何写入口能改变它。
+
 ### 索引
 
 | 表 | 索引 | 用途 |
@@ -136,6 +152,7 @@ CREATE TABLE IF NOT EXISTS claim_events (
   alert_name  VARCHAR(128) NOT NULL,
   operator    VARCHAR(64)  NOT NULL,
   event_type  VARCHAR(20)  NOT NULL,
+  note        VARCHAR(500) NULL,   -- US3 处置动作文案（仅 RESOLVE/CLOSE 事件携带）
   created_at  TIMESTAMP    NOT NULL,
   CONSTRAINT pk_claim_events PRIMARY KEY (id),
   CONSTRAINT fk_claim_events_alert FOREIGN KEY (alert_name) REFERENCES alerts(alert_name)
@@ -151,11 +168,12 @@ CREATE INDEX IF NOT EXISTS idx_claim_events_alert   ON claim_events(alert_name, 
 
 ```
 Alert 1 ──── 0..* ClaimEvent
-   行内字段承载当前归属       只追加审计/时间线（V1 仅 CLAIM）
+   行内字段承载当前归属       只追加审计/时间线（已写 CLAIM/SUPPRESS/SUPPRESS_CANCEL/RESOLVE/CLOSE）
 ```
 
 - 每次成功认领：`alerts` 行状态变更（1 条 UPDATE）+ `claim_events` 追加（1 条 INSERT），同一事务。
 - 认领后「当前负责人」查询直接读 `alerts.claimed_by/claimed_at`，不扫历史表 → FR-003「立即可见」低成本满足。
+- 每次成功处置：`endIfOwner` UPDATE（1 条，顺手清抑制窗）+ `claim_events` 追 `RESOLVE`/`CLOSE`（1 条，带 note），同一事务——与认领/抑制同构。
 
 ## 7. 校验规则（映射 FR）
 
@@ -165,7 +183,11 @@ Alert 1 ──── 0..* ClaimEvent
 | 仅 `DIAGNOSED` 可认领 | FR-006 | `claimIfDiagnosed` 状态谓词 |
 | 已结束不可认领 | FR-006 / FR-011 | 同上（RESOLVED/CLOSED 不匹配谓词） |
 | 重启后记录可查 | FR-005 | 默认 H2 file 持久化（R1） |
-| 负责人不可在结束前变更（无改派） | FR-004 | V1 无任何改派入口；唯一写路径是 claim |
+| 负责人不可在结束前变更（无改派） | FR-004 | V1 无改派入口：claim/suppress/disposition 均不更新 IN_PROGRESS 行的 claimed_by |
 | 仅当前负责人可设/取消抑制窗口 | FR-009 | `setSuppression` 谓词 `claimed_by=:operator` + 守卫 40905 |
 | 抑制窗口 `until` 必须晚于当前 | FR-009 | service `requireUntilInFuture` → 40004 |
 | 抑制期再次触发不产生新诊断 | FR-008 | recorder 抑制闸（不刷新 lastDiagnosedAt） |
+| 仅当前负责人可对处理中告警记处置进终态 | FR-010 | `endIfOwner` 谓词 `claimed_by=:operator` + 守卫 40906 |
+| 处置结局仅 RESOLVED/CLOSED（无中间态） | FR-010 | service `requireTerminalOutcome` → 40006 |
+| 处置动作文案 ≤ 500 字（可空） | FR-010 | service `requireActionLength` → 40007；列长同源共 `NOTE_MAX_LENGTH` |
+| 已结束不可再认领/处置（终态单向） | FR-011 | 各写路径谓词拒终态 → 40903 |
