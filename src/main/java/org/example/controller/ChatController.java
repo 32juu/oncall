@@ -72,9 +72,10 @@ public class ChatController {
         try {
             logger.info("收到对话请求 - SessionId: {}, Question: {}", request.getId(), request.getQuestion());
 
-            // 参数校验
-            if (request.getQuestion() == null || request.getQuestion().trim().isEmpty()) {
-                logger.warn("问题内容为空");
+            // 参数校验：问题与图片皆空才拒（直贴图允许只发图不带文字）
+            if ((request.getQuestion() == null || request.getQuestion().trim().isEmpty())
+                    && (request.getImageBase64() == null || request.getImageBase64().trim().isEmpty())) {
+                logger.warn("问题内容与图片均为空");
                 return ResponseEntity.ok(ApiResponse.success(ChatResponse.error("问题内容不能为空")));
             }
 
@@ -100,11 +101,15 @@ public class ChatController {
             // 创建 ReactAgent
             ReactAgent agent = chatService.createReactAgent(chatModel, systemPrompt);
             
+            // 直贴图(形态 B)：有图先 VL 转述，把 [转述+问题] 作为本轮用户文本交给 agent（agent 本身零改动）
+            String turn = chatService.resolveUserTurn(request.getQuestion(),
+                    request.getImageBase64(), request.getImageMimeType(), request.getImageFileName());
+
             // 执行对话
-            String fullAnswer = chatService.executeChat(agent, request.getQuestion());
-            
-            // 更新会话历史
-            session.addMessage(request.getQuestion(), fullAnswer);
+            String fullAnswer = chatService.executeChat(agent, turn);
+
+            // 更新会话历史（存 turn：图片转述随历史进后续 system prompt，跨轮可引用）
+            session.addMessage(turn, fullAnswer);
             logger.info("已更新会话历史 - SessionId: {}, 当前消息对数: {}", 
                 request.getId(), session.getMessagePairCount());
             
@@ -150,9 +155,10 @@ public class ChatController {
     public SseEmitter chatStream(@RequestBody ChatRequest request) {
         SseEmitter emitter = new SseEmitter(300000L); // 5分钟超时
 
-        // 参数校验
-        if (request.getQuestion() == null || request.getQuestion().trim().isEmpty()) {
-            logger.warn("问题内容为空");
+        // 参数校验：问题与图片皆空才拒（直贴图允许只发图不带文字）
+        if ((request.getQuestion() == null || request.getQuestion().trim().isEmpty())
+                && (request.getImageBase64() == null || request.getImageBase64().trim().isEmpty())) {
+            logger.warn("问题内容与图片均为空");
             try {
                 emitter.send(SseEmitter.event().name("message").data(SseMessage.error("问题内容不能为空"), MediaType.APPLICATION_JSON));
                 emitter.complete();
@@ -191,9 +197,13 @@ public class ChatController {
                 // 用于累积完整答案
                 StringBuilder fullAnswerBuilder = new StringBuilder();
                 
+                // 直贴图(形态 B)：有图先 VL 转述，把 [转述+问题] 作为本轮用户文本交给 agent（agent 本身零改动）
+                String turn = chatService.resolveUserTurn(request.getQuestion(),
+                        request.getImageBase64(), request.getImageMimeType(), request.getImageFileName());
+
                 // 使用 agent.stream() 进行流式对话
-                Flux<NodeOutput> stream = agent.stream(request.getQuestion());
-                
+                Flux<NodeOutput> stream = agent.stream(turn);
+
                 stream.subscribe(
                     output -> {
                         try {
@@ -250,8 +260,8 @@ public class ChatController {
                             logger.info("ReactAgent 流式对话完成 - SessionId: {}, 答案长度: {}", 
                                 request.getId(), fullAnswer.length());
                             
-                            // 更新会话历史
-                            session.addMessage(request.getQuestion(), fullAnswer);
+                            // 更新会话历史（存 turn：图片转述随历史进后续 system prompt，跨轮可引用）
+                            session.addMessage(turn, fullAnswer);
                             logger.info("已更新会话历史 - SessionId: {}, 当前消息对数: {}", 
                                 request.getId(), session.getMessagePairCount());
                             
@@ -526,6 +536,19 @@ public class ChatController {
         @com.fasterxml.jackson.annotation.JsonProperty(value = "Question")
         @com.fasterxml.jackson.annotation.JsonAlias({"question", "QUESTION"})
         private String Question;
+
+        // 直贴图(形态 B)：三字段皆 null → 老纯文本路径，行为零差。base64 只用于转述，服务端不持久化二进制。
+        @com.fasterxml.jackson.annotation.JsonProperty("imageBase64")
+        @com.fasterxml.jackson.annotation.JsonAlias({"image_base64", "ImageBase64", "image"})
+        private String imageBase64; // 图片 base64（容忍 data: 前缀）
+
+        @com.fasterxml.jackson.annotation.JsonProperty("imageMimeType")
+        @com.fasterxml.jackson.annotation.JsonAlias({"image_mime_type", "ImageMimeType", "mimeType"})
+        private String imageMimeType; // image/jpeg | image/png | image/webp
+
+        @com.fasterxml.jackson.annotation.JsonProperty("imageFileName")
+        @com.fasterxml.jackson.annotation.JsonAlias({"image_file_name", "ImageFileName", "fileName"})
+        private String imageFileName; // 原始文件名（溯源/标题）
 
     }
 

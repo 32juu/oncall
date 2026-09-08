@@ -20,8 +20,10 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
 
 import java.util.ArrayList;
+import java.util.Base64;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 /**
  * 聊天服务
@@ -32,8 +34,17 @@ public class ChatService {
 
     private static final Logger logger = LoggerFactory.getLogger(ChatService.class);
 
+    // 直贴图(形态 B)：用户输入 base64 解码后上限 4MB（防超大 body/内存）
+    private static final int MAX_IMAGE_BYTES = 4 * 1024 * 1024;
+
+    // 与 /api/upload 图片白名单同构：jpg/jpeg → image/jpeg、png → image/png、webp → image/webp
+    private static final Set<String> SUPPORTED_IMAGE_MIME = Set.of("image/jpeg", "image/png", "image/webp");
+
     @Autowired
     private InternalDocsTools internalDocsTools;
+
+    @Autowired
+    private ImageCaptionService imageCaptionService; // 直贴图复用切片1 的 VL 看图服务（qwen-vl → Markdown）
 
     @Autowired
     private DateTimeTools dateTimeTools;
@@ -204,5 +215,55 @@ public class ChatService {
         String answer = response.getText();
         logger.info("ReactAgent 对话完成，答案长度: {}", answer.length());
         return answer;
+    }
+
+    /**
+     * 直贴图(形态 B)的本轮用户文本解析：计算真正发给 agent 的 user turn。
+     * <p>无图 → 原样返回 question（老路径零行为差）；有图 → 解码 base64 → qwen-vl 转述成 Markdown →
+     * 组 {@code 【用户上传图片 …的转述】\n{caption}(\n\n【用户问题】{question})}——图片内容以文本进 agent，
+     * agent 看完图仍能照常调 RAG/认领/抑制工具；caption 随 turn 进 history，跨轮可引用。
+     * <p>非法输入（坏 base64 / 不支持 mime / 超大 / caption 失败）抛异常，由 controller 现有 catch 兜成聊天错误信封。
+     */
+    public String resolveUserTurn(String question, String imageBase64, String imageMimeType, String imageFileName) {
+        if (imageBase64 == null || imageBase64.isBlank()) {
+            return question;
+        }
+        if (imageMimeType == null || !SUPPORTED_IMAGE_MIME.contains(imageMimeType)) {
+            throw new IllegalArgumentException("不支持的图片类型: " + imageMimeType + "（仅支持 jpg/jpeg/png/webp）");
+        }
+        byte[] imageBytes = decodeImageBase64(imageBase64);
+        if (imageBytes.length == 0) {
+            throw new IllegalArgumentException("图片内容为空");
+        }
+        if (imageBytes.length > MAX_IMAGE_BYTES) {
+            throw new IllegalArgumentException("图片过大，上限 " + (MAX_IMAGE_BYTES / 1024 / 1024) + "MB");
+        }
+        String fileName = (imageFileName == null || imageFileName.isBlank()) ? "粘贴图片" : imageFileName;
+
+        // VL 转述：失败（网络/模型）异常直接上抛 → controller 包成聊天错误
+        String caption = imageCaptionService.caption(fileName, imageBytes, imageMimeType);
+
+        StringBuilder turn = new StringBuilder();
+        turn.append("【用户上传图片 ").append(fileName).append(" 的转述内容】\n").append(caption);
+        if (question != null && !question.isBlank()) {
+            turn.append("\n\n【用户问题】").append(question.trim());
+        }
+        return turn.toString();
+    }
+
+    /**
+     * 解码图片 base64：容忍 {@code data:image/png;base64,} 前缀（前端 FileReader 直出形态）。
+     */
+    private byte[] decodeImageBase64(String base64) {
+        String s = base64.trim();
+        int comma = s.indexOf(',');
+        if (s.startsWith("data:") && comma != -1) {
+            s = s.substring(comma + 1);
+        }
+        try {
+            return Base64.getDecoder().decode(s);
+        } catch (IllegalArgumentException e) {
+            throw new IllegalArgumentException("图片 base64 格式非法");
+        }
     }
 }
