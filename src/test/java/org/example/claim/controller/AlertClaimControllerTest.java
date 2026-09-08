@@ -56,6 +56,16 @@ class AlertClaimControllerTest {
         return v;
     }
 
+    private AlertView resolved(String owner) {
+        AlertView v = new AlertView();
+        v.setAlertName("HighCPUUsage");
+        v.setStatus(AlertStatus.RESOLVED);
+        v.setClaimedBy(owner);
+        v.setClaimedAt(Instant.now());
+        v.setLastDiagnosedAt(Instant.now());
+        return v;
+    }
+
     @Test
     void claim_success_returns200AndView() throws Exception {
         when(alertClaimService.claim(eq("HighCPUUsage"), eq("sre-alice"))).thenReturn(inProgress("sre-alice"));
@@ -226,5 +236,60 @@ class AlertClaimControllerTest {
         mockMvc.perform(delete("/api/alerts/HighCPUUsage/suppress"))
                 .andExpect(status().isBadRequest())
                 .andExpect(jsonPath("$.code").value(40001));
+    }
+
+    // ============ US3 处置终局 ============
+
+    @Test
+    void disposition_success_returns200AndResolved() throws Exception {
+        when(alertClaimService.recordDisposition(eq("HighCPUUsage"), eq("sre-alice"), eq("RESOLVED"), eq("已重启故障服务")))
+                .thenReturn(resolved("sre-alice"));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/disposition")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\",\"outcome\":\"RESOLVED\",\"action\":\"已重启故障服务\"}"))
+                .andExpect(status().isOk())
+                .andExpect(jsonPath("$.code").value(200))
+                .andExpect(jsonPath("$.data.alertName").value("HighCPUUsage"))
+                .andExpect(jsonPath("$.data.status").value("RESOLVED"))
+                .andExpect(jsonPath("$.data.claimedBy").value("sre-alice"));
+    }
+
+    @Test
+    void disposition_notOwner_returns409() throws Exception {
+        when(alertClaimService.recordDisposition(eq("HighCPUUsage"), eq("sre-bob"), eq("RESOLVED"), isNull()))
+                .thenThrow(new AlertClaimException(ErrorCode.DISPOSITION_NOT_OWNER));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/disposition")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-bob\",\"outcome\":\"RESOLVED\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(40906));
+    }
+
+    @Test
+    void disposition_invalidOutcome_returns400() throws Exception {
+        when(alertClaimService.recordDisposition(eq("HighCPUUsage"), eq("sre-alice"), eq("BOGUS"), isNull()))
+                .thenThrow(new AlertClaimException(ErrorCode.INVALID_OUTCOME));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/disposition")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\",\"outcome\":\"BOGUS\"}"))
+                .andExpect(status().isBadRequest())
+                .andExpect(jsonPath("$.code").value(40006));
+    }
+
+    @Test
+    void disposition_endedAlert_returns409Ended() throws Exception {
+        when(alertClaimService.recordDisposition(eq("HighCPUUsage"), eq("sre-alice"), eq("CLOSED"), isNull()))
+                .thenThrow(new AlertClaimException(ErrorCode.ALERT_ENDED,
+                        "该告警已结束，无法再记录处置"));
+
+        mockMvc.perform(post("/api/alerts/HighCPUUsage/disposition")
+                        .contentType(MediaType.APPLICATION_JSON)
+                        .content("{\"operator\":\"sre-alice\",\"outcome\":\"CLOSED\"}"))
+                .andExpect(status().isConflict())
+                .andExpect(jsonPath("$.code").value(40903))
+                .andExpect(jsonPath("$.message").value("该告警已结束，无法再记录处置"));
     }
 }

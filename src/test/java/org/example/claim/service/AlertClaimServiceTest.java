@@ -278,4 +278,121 @@ class AlertClaimServiceTest {
                 .isInstanceOfSatisfying(AlertClaimException.class,
                         ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.SUPPRESS_NOT_OWNER));
     }
+
+    // ============ US3 处置终局（RESOLVED/CLOSED） ============
+    // 真 CAS 语义（谓词命中）由 @DataJpaTest 的 AlertDispositionRepositoryTest 承载；此处只验证编排与守卫映射。
+
+    @Test
+    void dispose_success_resolves_returnsViewAndWritesResolveEventWithNote() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(1);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.of(alert("RESOLVED", "sre-alice")));
+
+        String action = "已重启故障服务并观察 10 分钟";
+        AlertView view = service.recordDisposition(ALERT, "sre-alice", "RESOLVED", action);
+
+        assertThat(view.getStatus()).isEqualTo(AlertStatus.RESOLVED);
+        verify(claimEventRepository).save(argThat(e ->
+                ClaimEvent.TYPE_RESOLVE.equals(e.getEventType())
+                        && action.equals(e.getNote())));
+    }
+
+    @Test
+    void dispose_success_close_caseInsensitiveOutcome_writesCloseEvent() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(1);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.of(alert("CLOSED", "sre-alice")));
+
+        AlertView view = service.recordDisposition(ALERT, "sre-alice", " closed ", null);
+
+        assertThat(view.getStatus()).isEqualTo(AlertStatus.CLOSED);
+        verify(claimEventRepository).save(argThat(e ->
+                ClaimEvent.TYPE_CLOSE.equals(e.getEventType())
+                        && e.getNote() == null));
+    }
+
+    @Test
+    void dispose_notOwner_throwsDispositionNotOwner() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(0);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.of(alert("IN_PROGRESS", "sre-bob")));
+
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "RESOLVED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.DISPOSITION_NOT_OWNER));
+        verify(claimEventRepository, never()).save(any(ClaimEvent.class));
+    }
+
+    @Test
+    void dispose_notClaimedYet_throwsNotClaimed() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(0);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.of(alert("DIAGNOSED", null)));
+
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "RESOLVED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ALERT_NOT_CLAIMED));
+    }
+
+    @Test
+    void dispose_endedAlert_throwsEnded() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(0);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.of(alert("RESOLVED", "sre-alice")));
+
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "CLOSED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ALERT_ENDED));
+    }
+
+    @Test
+    void dispose_unknownAlert_throwsNotFound() {
+        when(alertRepository.endIfOwner(any(String.class), any(String.class), any(String.class), any(Instant.class)))
+                .thenReturn(0);
+        when(alertRepository.findById(ALERT)).thenReturn(Optional.empty());
+
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "RESOLVED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ALERT_NOT_FOUND));
+    }
+
+    @Test
+    void dispose_garbageOutcome_throwsInvalidOutcome() {
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "BOGUS", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_OUTCOME));
+        verify(alertRepository, never()).endIfOwner(any(), any(), any(), any());
+    }
+
+    @Test
+    void dispose_nonTerminalOutcome_throwsInvalidOutcome() {
+        // DIAGNOSED/IN_PROGRESS 在枚举里但不是终结结局 → 40006
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "DIAGNOSED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_OUTCOME));
+    }
+
+    @Test
+    void dispose_blankOutcome_throwsInvalidOutcome() {
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", null, null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.INVALID_OUTCOME));
+    }
+
+    @Test
+    void dispose_actionTooLong_throwsActionTooLong() {
+        String longAction = "x".repeat(ClaimEvent.NOTE_MAX_LENGTH + 1);
+
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "sre-alice", "RESOLVED", longAction))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.ACTION_TOO_LONG));
+        verify(alertRepository, never()).endIfOwner(any(), any(), any(), any());
+    }
+
+    @Test
+    void dispose_blankOperator_throwsBlankOperator() {
+        assertThatThrownBy(() -> service.recordDisposition(ALERT, "  ", "RESOLVED", null))
+                .isInstanceOfSatisfying(AlertClaimException.class,
+                        ex -> assertThat(ex.getErrorCode()).isEqualTo(ErrorCode.BLANK_OPERATOR));
+    }
 }

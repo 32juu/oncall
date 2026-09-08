@@ -6,6 +6,7 @@ import org.example.claim.dto.AlertListResponse;
 import org.example.claim.dto.AlertView;
 import org.example.claim.dto.ApiResponse;
 import org.example.claim.dto.ClaimRequest;
+import org.example.claim.dto.DispositionRequest;
 import org.example.claim.dto.ErrorCode;
 import org.example.claim.dto.SuppressRequest;
 import org.example.claim.entity.AlertStatus;
@@ -62,6 +63,15 @@ public class AlertClaimController {
     public ApiResponse<AlertView> cancelSuppression(@PathVariable String alertName,
                                                     @RequestParam(name = "operator", required = false) String operator) {
         return ApiResponse.success(alertClaimService.cancelSuppression(alertName, operator));
+    }
+
+    /** 处置终局（US3 FR-010/FR-011）：当前负责人对处理中告警记录动作并进入 RESOLVED/CLOSED（一次调用即终局） */
+    @PostMapping("/{alertName}/disposition")
+    public ApiResponse<AlertView> disposition(@PathVariable String alertName,
+                                              @RequestBody(required = false) DispositionRequest request) {
+        DispositionRequest req = (request == null) ? new DispositionRequest() : request;
+        return ApiResponse.success(alertClaimService.recordDisposition(
+                alertName, req.getOperator(), req.getOutcome(), req.getAction()));
     }
 
     /** 查询单条告警（负责人可见性 FR-003） */

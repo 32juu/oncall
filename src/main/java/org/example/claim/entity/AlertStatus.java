@@ -2,8 +2,8 @@ package org.example.claim.entity;
 
 /**
  * 告警生命周期状态：已诊断 → 处理中 → 已解决/已关闭。
- * V1（认领闭环）仅允许执行 {@link #DIAGNOSED} → {@link #IN_PROGRESS} 迁移；
- * {@link #RESOLVED} / {@link #CLOSED} 为 P3 处置记录预留。
+ * 认领执行 DIAGNOSED → IN_PROGRESS；处置（US3，recordDisposition）执行 IN_PROGRESS → RESOLVED/CLOSED，
+ * 由 {@code endIfOwner} 原子条件更新保证（仅当前负责人，参照 data-model §3）。
  */
 public enum AlertStatus {
     DIAGNOSED,

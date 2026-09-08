@@ -54,5 +54,23 @@ public interface AlertRepository extends JpaRepository<Alert, String> {
                        @Param("until") Instant until,
                        @Param("now") Instant now);
 
+    /**
+     * 处置终局（US3）：仅当前负责人对「处理中」告警可迁移到终态（RESOLVED/CLOSED）。
+     * 顺手清掉抑制窗口（结局 = 抑制无意义）；status 变更由 {@code :outcome} 传入（service 已校验终态）。
+     * 并发语义同 claimIfDiagnosed/setSuppression（行锁 + 谓词重估）；失败由 service 回读分类（404/409 守卫）。
+     *
+     * @return 受影响行数（1=迁移成功；0=非处理中 / 非本人负责 / 已结束 / 不存在）
+     */
+    @Modifying(clearAutomatically = true, flushAutomatically = true)
+    @Query(value = """
+            UPDATE alerts
+               SET status = :outcome, suppressed_until = NULL, updated_at = :now
+             WHERE alert_name = :alertName AND status = 'IN_PROGRESS' AND claimed_by = :operator
+            """, nativeQuery = true)
+    int endIfOwner(@Param("alertName") String alertName,
+                   @Param("operator") String operator,
+                   @Param("outcome") String outcome,
+                   @Param("now") Instant now);
+
     List<Alert> findByStatus(AlertStatus status);
 }
