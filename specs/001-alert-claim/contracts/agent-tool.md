@@ -58,7 +58,7 @@ public class ClaimAlertTool {
 }
 ```
 
-> 落地时**没有**实现原纸面的 `@ToolLevel(Level.WRITE)` 注解——该注解当前不存在于代码（执行文档 §5.2 草稿），本切片遵循 §6 范围边界不建注解本体/拦截器。「写权限」由两件已落地的事实表达：①条件注册缺省关（bean 缺省不存在）；②operator 服务端解析（模型无身份表达通道）。`@ToolLevel` + `ToolRegistry`（统一注册入口）作为后续切片第一个 Task 单列 P 债。
+> **后续切片补记（2026-09-08 commit 4050644）**：`@ToolLevel` + `ToolRegistry`（执行文档 §5.2）已落地为 `org.example.agent.tool.ToolLevel/ToolRegistry`。`ClaimAlertTool` 现带 `@ToolLevel(Level.WRITE)`（D2 分级成为可扫描事实），不再是"两件未建注解的事实"。但**拦截面从纸面的「调用前角色鉴权」收敛为「按 agent 槽位的可见性过滤」**：AIOps 槽位在构建 agent 前把回调 `readOnlyOnly(...)`（滤 WRITE/HIGH_RISK）；运行时角色/用户级鉴权仍归账号/RBAC 切片（spec Assumptions 局限）。落地前 claim 工具只有两层守：「写权限」由①条件注册缺省关（bean 缺省不存在）+②operator 服务端解析表达。
 
 ## 4. 测试清单（只测"翻译层"）
 
@@ -71,7 +71,7 @@ public class ClaimAlertTool {
 | 未知异常 | service 抛 RuntimeException | 返回通用错误文案，不抛 | ✅ `claim_runtimeException_becomesGenericTextWithoutThrowing` |
 | 空 operator（D4 fail-closed） | 构造传空白 operator | 返回「未配置值班负责人」，`verify never` 调 service | ✅ `claim_blankDutyOperator_failsClosed_neverCallsService` |
 | `@ConditionalOnProperty` 缺省 / false / true | `ApplicationContextRunner` | 缺省与 false 无 bean；true 有 bean（防自动扫描泄漏） | ✅ `bean_absent_whenPropertyMissing/False` + `bean_present_whenPropertyTrue` |
-| `@ToolLevel(Level.WRITE)` 元数据 | 反射读注解 | 分级合规 | ⛔ 注解未实现（§6 边界），转后续切片 |
+| `@ToolLevel(Level.WRITE)` 元数据 | 反射读注解 | 分级合规 | ✅ 由 ToolRegistry 扫描证（`ToolRegistryTest.scan_wireAnnotation_intoRegistry_andFilter`），非本工具测试直接读注解 |
 
 ## 5. 开放项（记债、不假装解决）
 
@@ -80,7 +80,7 @@ public class ClaimAlertTool {
 
 ## 6. 范围边界（已落地，此边界内不做）
 
-- **不建 `ToolRegistry` / `@ToolLevel` 注解本体与拦截器**（D2 的执行载体，后续切片第一个 Task）。
+- ~~**不建 `ToolRegistry` / `@ToolLevel` 注解本体与拦截器**~~ → **已建**（2026-09-08 commit 4050644，见正文补记）。尚存边界：**运行时角色/用户级调用鉴权**（RBAC 切片）；HIGH_RISK 拦截策略（自愈执行 P3）。
 - **不做工具级审计表**（O2）。
 - **不在 chat 会话引入账号体系**（与 spec Assumptions 冒名局限同源，V1 以配置绑定占位；区分多用户归账号/RBAC 切片）。
 - **不接 AiOpsService**（注册面 = 仅聊天 agent，见 §1 D3 裁决）。
@@ -92,4 +92,6 @@ public class ClaimAlertTool {
 - `src/main/java/org/example/service/ChatService.java`：字段注入 + `buildMethodToolsArray()` + 系统提示词路由
 - `src/main/resources/application.yml`：`agent.claim-tool-enabled`（缺省 false）/ `agent.claim-operator`（缺省空）
 
-> **姊妹工具 `SuppressAlertTool`**（suppressAlert / cancelSuppression，2026-09-08 commit 41aa210）沿用**同一套 D1/D3/D4/D5 配方**，不再单独成文：位置 `org.example.claim.tool`、同 `agent.claim-tool-enabled` 闸、同 `agent.claim-operator` 身份、只接聊天 agent。与本文唯一差异是 **until 翻译层**（模型不心算当前时刻，收 ISO 时刻或相对时长 `2h`/`90m`/`1d`）。详见 [api.md](api.md) §2 与 `SuppressAlertToolTest`。
+> **姊妹工具 `SuppressAlertTool`**（suppressAlert / cancelSuppression，2026-09-08 commit 41aa210）沿用**同一套 D1/D3/D4/D5 配方**，不再单独成文：位置 `org.example.claim.tool`、同 `agent.claim-tool-enabled` 闸、同 `agent.claim-operator` 身份、只接聊天 agent、现同带 `@ToolLevel(WRITE)`。与本文唯一差异是 **until 翻译层**（模型不心算当前时刻，收 ISO 时刻或相对时长 `2h`/`90m`/`1d`）。详见 [api.md](api.md) §2 与 `SuppressAlertToolTest`。
+
+> **分级/权限层**（2026-09-08 commit 4050644）：claim 两工具标 `@ToolLevel(Level.WRITE)`；`ToolRegistry`（agent/tool）反射扫分级 bean，AIOps 槽位 `readOnlyOnly` 滤除写工具（见 §1 D3 裁决的机械执行）。`agent-tool.md` §6 原记的「注解/注册表 P 债」已还。

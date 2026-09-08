@@ -45,7 +45,7 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 8 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 8 个类：repository / service / controller / recorder / 并发 / 2× tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；claim 写工具覆盖在 ClaimAlertToolTest / SuppressAlertToolTest；工具分级/只读闸覆盖在 ToolRegistryTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
@@ -91,7 +91,9 @@ Tools are wired two ways into each `ReactAgent`:
 
 `QueryLogsTools` is injected `@Autowired(required = false)` — but note its `@ConditionalOnProperty` is **only a comment on the class**, so the bean is always present and always exposed to agents; the `cls.mock-enabled` flag (via `@Value`) only switches its internals between mock and real. In "real" mode `ChatService.buildMethodToolsArray` / `AiOpsService.buildMethodToolsArray` omit it from the explicit array, on the assumption the MCP client supplies log tools.
 
-`ClaimAlertTool` 与 `SuppressAlertTool`（claim 认领/抑制写工具）is the **corrected version of that lesson**: both carry a real `@ConditionalOnProperty(name="agent.claim-tool-enabled", havingValue="true")`（缺省关）——禁用时 bean 不存在，`ToolCallbackProvider` 的自动扫描（见上 `.tools` 一行）就不会把写工具泄漏给任何 agent。它们 `@Autowired(required=false)` 只注入 **ChatService**（`buildMethodToolsArray` / `buildSystemPrompt`）；AiOpsService 有意不接。
+`ClaimAlertTool` 与 `SuppressAlertTool`（claim 认领/抑制写工具）is the **corrected version of that lesson**: both carry a real `@ConditionalOnProperty(name="agent.claim-tool-enabled", havingValue="true")`（缺省关）——禁用时 bean 不存在，`ToolCallbackProvider` 的自动扫描（见上 `.tools` 一行）就不会把写工具泄漏给任何 agent。它们 `@Autowired(required=false)` 只注入 **ChatService**（`buildMethodToolsArray` / `buildSystemPrompt`）；两工具类还标了 `@ToolLevel(Level.WRITE)`（分级元数据，`org.example.agent.tool.ToolLevel`）。
+
+**双保险的机械闸（D2/D3，2026-09-08 commit 4050644）**：`@ConditionalOnProperty` 挡「bean 存在面」——但 claim-tool-enabled=true 时写工具 bean 存在、会被全局扫描进 `ToolCallbackProvider`，若只靠"AiOpsService 不注入"就漏了（无人值守可写）。故引入 `ToolRegistry`（`org.example.agent.tool`）：反射扫带 `@ToolLevel` 的 bean 建「工具名→级别」表，`AiOpsService.executeAiOpsAnalysis` 在构建 planner/executor **前**把入参回调 `readOnlyOnly(...)`（滤除 WRITE/HIGH_RISK）。即：注册面两层——① bean 闸（缺省关）② 槽位闸（AIOps 只读，`ToolLevel` 驱动）。聊天 agent 不受②影响（认领/抑制=人工接管，允 WRITE）。
 
 ### Milvus schema
 
