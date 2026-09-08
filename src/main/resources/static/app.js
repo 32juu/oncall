@@ -109,7 +109,12 @@ class SuperBizAgentApp {
         this.modeDropdown = document.getElementById('modeDropdown');
         this.currentModeText = document.getElementById('currentModeText');
         this.fileInput = document.getElementById('fileInput');
-        
+        // 直贴图元素与待发状态（形态 B：base64 随聊天消息上传）
+        this.chatImageItem = document.getElementById('chatImageItem');
+        this.chatImageInput = document.getElementById('chatImageInput');
+        this.imagePreviewBar = document.getElementById('imagePreviewBar');
+        this.pendingImage = null; // {name, mime, dataUrl}：用户选/粘贴、尚未发送的图片
+
         // 聊天区域元素
         this.chatMessages = document.getElementById('chatMessages');
         this.loadingOverlay = document.getElementById('loadingOverlay');
@@ -203,6 +208,41 @@ class SuperBizAgentApp {
         if (this.fileInput) {
             this.fileInput.addEventListener('change', (e) => this.handleFileSelect(e));
         }
+
+        // 直贴图：工具菜单「发图片」/ 粘贴 共用 stageImage
+        if (this.chatImageItem) {
+            this.chatImageItem.addEventListener('click', () => {
+                if (this.chatImageInput) {
+                    this.chatImageInput.click();
+                }
+                this.closeToolsMenu();
+            });
+        }
+        if (this.chatImageInput) {
+            this.chatImageInput.addEventListener('change', (e) => {
+                const file = e.target.files && e.target.files[0];
+                if (file) {
+                    this.stageImage(file);
+                }
+                this.chatImageInput.value = ''; // 清空以便重复选同一文件
+            });
+        }
+        if (this.messageInput) {
+            this.messageInput.addEventListener('paste', (e) => {
+                const items = e.clipboardData && e.clipboardData.items;
+                if (!items) return;
+                for (const item of items) {
+                    if (item.kind === 'file' && item.type && item.type.startsWith('image/')) {
+                        const file = item.getAsFile();
+                        if (file) {
+                            e.preventDefault(); // 不把二进制图片塞进文本框
+                            this.stageImage(file);
+                        }
+                        return;
+                    }
+                }
+            });
+        }
     }
 
     // 切换工具菜单显示/隐藏
@@ -251,7 +291,8 @@ class SuperBizAgentApp {
         if (this.messageInput) {
             this.messageInput.value = '';
         }
-        
+        this.clearPendingImage(); // 直贴图：新建对话时一并丢弃待发图片
+
         // 清空当前对话历史
         this.currentChatHistory = [];
         
@@ -555,8 +596,10 @@ class SuperBizAgentApp {
         if (this.messageInput) {
             message = this.messageInput.value.trim();
         }
-        
-        if (!message) {
+
+        // 直贴图(形态 B)：允许「只发图不带文字」（图片内容由后端 VL 转述后进 agent）
+        const image = this.pendingImage && this.pendingImage.dataUrl ? this.pendingImage : null;
+        if (!message && !image) {
             this.showNotification('请输入消息内容', 'warning');
             return;
         }
@@ -566,13 +609,18 @@ class SuperBizAgentApp {
             return;
         }
 
-        // 显示用户消息
-        this.addMessage('user', message);
-        
-        // 清空输入框
+        // 用户气泡：有图则在文字前标注 [图片]（图内容后端转述，前端本地不存二进制）
+        const userLabel = image ? (message ? `📷 ${image.name}\n${message}` : `📷 ${image.name}`) : message;
+        this.addMessage('user', userLabel);
+
+        // 清空输入框与待发图预览
         if (this.messageInput) {
             this.messageInput.value = '';
         }
+        this.clearPendingImage();
+
+        // 组装请求载荷（含图字段）；发出后即弃
+        const payload = this.buildChatPayload(message, image);
 
         // 设置发送状态
         this.isStreaming = true;
@@ -580,9 +628,9 @@ class SuperBizAgentApp {
 
         try {
             if (this.currentMode === 'quick') {
-                await this.sendQuickMessage(message);
+                await this.sendQuickMessage(message, payload);
             } else if (this.currentMode === 'stream') {
-                await this.sendStreamMessage(message);
+                await this.sendStreamMessage(message, payload);
             }
         } catch (error) {
             console.error('发送消息失败:', error);
@@ -590,7 +638,7 @@ class SuperBizAgentApp {
         } finally {
             this.isStreaming = false;
             this.updateUI();
-            
+
             // 如果当前对话是从历史记录加载的，更新历史记录
             if (this.isCurrentChatFromHistory && this.currentChatHistory.length > 0) {
                 this.updateCurrentChatHistory();
@@ -600,20 +648,17 @@ class SuperBizAgentApp {
     }
 
     // 发送快速消息（普通对话）
-    async sendQuickMessage(message) {
+    async sendQuickMessage(message, payload) {
         // 添加等待提示消息
         const loadingMessage = this.addLoadingMessage('正在思考...');
-        
+
         try {
             const response = await fetch(`${this.apiBaseUrl}/chat`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    Id: this.sessionId,
-                    Question: message
-                })
+                body: JSON.stringify(payload || this.buildChatPayload(message, null))
             });
 
             if (!response.ok) {
@@ -659,17 +704,14 @@ class SuperBizAgentApp {
     }
 
     // 发送流式消息
-    async sendStreamMessage(message) {
+    async sendStreamMessage(message, payload) {
         try {
             const response = await fetch(`${this.apiBaseUrl}/chat_stream`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
                 },
-                body: JSON.stringify({
-                    Id: this.sessionId,
-                    Question: message
-                })
+                body: JSON.stringify(payload || this.buildChatPayload(message, null))
             });
 
             if (!response.ok) {
@@ -802,6 +844,87 @@ class SuperBizAgentApp {
     }
 
     // 添加消息到聊天界面
+    // ==================== 直贴图（形态 B）辅助 ====================
+
+    // 暂存待发图片：文件选择与 Ctrl+V 粘贴共用；成功后渲染预览 chip
+    stageImage(file) {
+        if (!file) return false;
+        if (!file.type || !file.type.startsWith('image/')) {
+            this.showNotification('只支持选择/粘贴图片文件', 'warning');
+            return false;
+        }
+        // 前端容量保护：后端解析上限 4MB，base64 会膨胀 ~1.33 倍，这里按 5MB 拦
+        if (file.size > 5 * 1024 * 1024) {
+            this.showNotification('图片过大，请选择 5MB 以内的图片', 'warning');
+            return false;
+        }
+        const reader = new FileReader();
+        reader.onload = (e) => {
+            this.pendingImage = {
+                name: file.name || 'pasted.png',
+                mime: file.type || 'image/png',
+                dataUrl: e.target.result
+            };
+            this.renderPendingImage();
+        };
+        reader.readAsDataURL(file);
+        return true;
+    }
+
+    // 在输入区上方渲染可移除的小缩略 chip
+    renderPendingImage() {
+        if (!this.imagePreviewBar || !this.pendingImage) return;
+        const img = this.pendingImage;
+        this.imagePreviewBar.innerHTML = '';
+        this.imagePreviewBar.style.display = 'block';
+
+        const chip = document.createElement('div');
+        chip.style.cssText = 'display:inline-flex;align-items:center;gap:8px;background:#f2f3f5;'
+            + 'border:1px solid #e0e0e0;border-radius:8px;padding:4px 8px;margin-bottom:6px;font-size:12px;color:#333;';
+
+        const thumb = document.createElement('img');
+        thumb.src = img.dataUrl;
+        thumb.style.cssText = 'height:36px;width:auto;border-radius:4px;';
+        thumb.alt = img.name;
+
+        const name = document.createElement('span');
+        name.textContent = img.name;
+
+        const removeBtn = document.createElement('button');
+        removeBtn.type = 'button';
+        removeBtn.textContent = '✕';
+        removeBtn.title = '移除图片';
+        removeBtn.style.cssText = 'border:none;background:none;cursor:pointer;color:#999;'
+            + 'font-size:13px;line-height:1;padding:2px;';
+        removeBtn.addEventListener('click', () => this.clearPendingImage());
+
+        chip.appendChild(thumb);
+        chip.appendChild(name);
+        chip.appendChild(removeBtn);
+        this.imagePreviewBar.appendChild(chip);
+    }
+
+    // 清除待发图片（发送后 / 新建对话 / 手动 ✕）
+    clearPendingImage() {
+        this.pendingImage = null;
+        if (this.imagePreviewBar) {
+            this.imagePreviewBar.innerHTML = '';
+            this.imagePreviewBar.style.display = 'none';
+        }
+    }
+
+    // 组装聊天请求载荷：Id/Question + 直贴图可选字段（剥掉 data:...;base64, 前缀）
+    buildChatPayload(message, image) {
+        const payload = { Id: this.sessionId, Question: message };
+        if (image && image.dataUrl) {
+            const comma = image.dataUrl.indexOf(',');
+            payload.imageBase64 = comma >= 0 ? image.dataUrl.slice(comma + 1) : image.dataUrl;
+            payload.imageMimeType = image.mime;
+            payload.imageFileName = image.name;
+        }
+        return payload;
+    }
+
     addMessage(type, content, isStreaming = false, saveToHistory = true) {
         // 检查是否是第一条消息，如果是则移除居中样式
         const isFirstMessage = this.chatMessages && this.chatMessages.querySelectorAll('.message').length === 0;
