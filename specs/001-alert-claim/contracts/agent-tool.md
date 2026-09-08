@@ -91,3 +91,5 @@ public class ClaimAlertTool {
 - `src/test/java/org/example/claim/tool/ClaimAlertToolTest.java`（新，7 例）
 - `src/main/java/org/example/service/ChatService.java`：字段注入 + `buildMethodToolsArray()` + 系统提示词路由
 - `src/main/resources/application.yml`：`agent.claim-tool-enabled`（缺省 false）/ `agent.claim-operator`（缺省空）
+
+> **姊妹工具 `SuppressAlertTool`**（suppressAlert / cancelSuppression，2026-09-08 commit 41aa210）沿用**同一套 D1/D3/D4/D5 配方**，不再单独成文：位置 `org.example.claim.tool`、同 `agent.claim-tool-enabled` 闸、同 `agent.claim-operator` 身份、只接聊天 agent。与本文唯一差异是 **until 翻译层**（模型不心算当前时刻，收 ISO 时刻或相对时长 `2h`/`90m`/`1d`）。详见 [api.md](api.md) §2 与 `SuppressAlertToolTest`。
