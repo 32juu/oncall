@@ -195,7 +195,7 @@ DELETE /api/alerts/{alertName}/suppress?operator=sre-alice
 版本边界下**只给方向**，尚未实现端点：
 
 - **P3 处置结局**：`POST /api/alerts/{alertName}/resolve`（或 `/close`）body `{operator, action, outcome}` → 触发 `IN_PROGRESS → RESOLVED/CLOSED`，仅当前负责人可用；事件写入 `claim_events.event_type`（预留 `RESOLVE/CLOSE` 位）。
-- **Agent 化**（复用现有工具注册）：若将来要让 planner/SRE 在 chat 里认领或设抑制窗口，新增 `@Tool`（如 `claimAlert(alertName, operator)` / `suppressAlert(...)`），按 `CLAUDE.md`（Tool registration model）在 `ChatService.buildMethodToolsArray()` 与 `AiOpsService.buildMethodToolsArray()` **双注册**；方向同 QueryMetricsTools 风格，尚未实现（纸上设计见 [agent-tool.md](agent-tool.md)）。
+- **Agent 化**（复用现有工具注册）：`claimAlert(alertName)` **已实现**（2026-09-08，commit fff41cc）——`org.example.claim.tool.ClaimAlertTool`，仅注册到聊天 agent（ChatService，认领=人工接管，不接 AiOpsService），operator 由部署配置 `agent.claim-operator` 绑定、签名不收 operator，见 [agent-tool.md](agent-tool.md)。`suppressAlert(...)`（聊天里设/取消抑制窗口）尚未实现，若将来要做，方向同上：`@Tool` 薄适配器 + `agent.claim-tool-enabled` 条件注册 + `agent.claim-operator` 身份。
 
 ## 3. 与现有系统的一致性注意
 

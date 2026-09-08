@@ -45,7 +45,7 @@ mvn spring-boot:run
 
 The `Makefile` wraps the full lifecycle — `make init` is the one-shot path (start Docker → start app → wait → upload `aiops-docs/*.md` into Milvus). Other targets: `make up/down/start/stop/restart/check/upload/clean`. The Makefile assumes Unix shell utilities (`curl`, `nohup`, `docker-compose`) — it will not work verbatim on a Windows shell.
 
-Tests live under `src/test/java/org/example/` (claim 模块现有 6 个类：repository / service / controller / recorder / 并发；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
+Tests live under `src/test/java/org/example/` (claim 模块现有 7 个类：repository / service / controller / recorder / 并发 / tool；US2 抑制窗口覆盖在 AlertClaimServiceTest / AlertSuppressionRepositoryTest / AlertClaimControllerTest / AlertDiagnosisRecorderTest 内；claimAlert 工具覆盖在 ClaimAlertToolTest)。跑 `mvn test` 即可 —— claim 套件跑在内存 H2(`MODE=MySQL`) 替身上，**无需 Docker / MySQL / DashScope**；`mvn verify` 是提交门。真 MySQL 的跨进程重启与并发权威复验是手动项，见 `specs/001-alert-claim/quickstart.md` §2（Step E/F）。
 
 ### Key HTTP endpoints
 
@@ -80,6 +80,7 @@ The supervisor loops planner→executor until `FINISH`. `ChatController.aiOps()`
 - `InternalDocsTools` — RAG search over internal docs.
 - `QueryMetricsTools` — queries Prometheus `/api/v1/alerts`; has a `prometheus.mock-enabled` flag that returns canned alerts (HighCPUUsage / HighMemoryUsage / SlowResponse).
 - `QueryLogsTools` — queries Tencent CLS; only implements a **mock** mode (`cls.mock-enabled`). The real CLS path is a stub that returns "尚未实现". Real log querying is intended to come from an MCP server, not this tool.
+- `ClaimAlertTool` — 认领一条已诊断告警（WRITE，薄适配 `AlertClaimService.claim`）。**位置例外**：不在 `agent/tool/`，放 `org.example.claim.tool`（与 claim 有界模块自洽，避免造出 `agent.tool ↔ claim.service` 双向包环）。默认不注册（`agent.claim-tool-enabled` 缺省 false）；operator 由 `agent.claim-operator` 部署绑定、**签名不收 operator**（模型无身份表达通道，D4）。**只接聊天 agent**，不接 AiOpsService（认领=人工接管，AIOps 不得无人值守自动认领）。设计见 `specs/001-alert-claim/contracts/agent-tool.md`。
 
 ### Tool registration model
 
@@ -87,7 +88,9 @@ Tools are wired two ways into each `ReactAgent`:
 - `.methodTools(...)` — passes tool bean instances so the framework generates tool JSON from `@Tool`/`@ToolParam` annotations.
 - `.tools(toolCallbacks)` — passes `ToolCallback[]` from `ToolCallbackProvider` (auto-scanned `@Tool` methods **and** any MCP tools).
 
-`QueryLogsTools` is injected `@Autowired(required = false)` — it only exists in the context when `cls.mock-enabled=true` (see `ChatService.buildMethodToolsArray` / `AiOpsService.buildMethodToolsArray`, and the commented `@ConditionalOnProperty` on the class). In "real" mode the tool array omits it, on the assumption the MCP client supplies log tools instead.
+`QueryLogsTools` is injected `@Autowired(required = false)` — but note its `@ConditionalOnProperty` is **only a comment on the class**, so the bean is always present and always exposed to agents; the `cls.mock-enabled` flag (via `@Value`) only switches its internals between mock and real. In "real" mode `ChatService.buildMethodToolsArray` / `AiOpsService.buildMethodToolsArray` omit it from the explicit array, on the assumption the MCP client supplies log tools.
+
+`ClaimAlertTool`（claim 认领写工具）is the **corrected version of that lesson**: it carries a real `@ConditionalOnProperty(name="agent.claim-tool-enabled", havingValue="true")`（缺省关）——禁用时 bean 不存在，`ToolCallbackProvider` 的自动扫描（见上 `.tools` 一行）就不会把写工具泄漏给任何 agent。它 `@Autowired(required=false)` 只注入 **ChatService**（`buildMethodToolsArray` / `buildSystemPrompt`）；AiOpsService 有意不接。
 
 ### Milvus schema
 
