@@ -9,7 +9,7 @@ server:
 file:
   upload:
     path: ./uploads
-    allowed-extensions: txt,md,jpg,jpeg,png,webp  # 图片类型 = 多模态：/api/upload 收图 → Qwen-VL 解析入 RAG（原生 PDF/Office 属另一条语料扩宽切片，见 ROADMAP §5）
+    allowed-extensions: txt,md,jpg,jpeg,png,webp,pdf,docx,pptx  # 多模态收尾：图片(jpg/jpeg/png/webp)→Qwen-VL 解析；文档(pdf/docx/pptx)→抽文本；同入 RAG（语料扩宽已收编 specs/004）
 
 milvus:
   host: localhost

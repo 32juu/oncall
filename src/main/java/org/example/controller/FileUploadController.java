@@ -2,6 +2,7 @@ package org.example.controller;
 
 import org.example.config.FileUploadConfig;
 import org.example.dto.FileUploadRes;
+import org.example.service.DocumentTextExtractor;
 import org.example.service.ImageCaptionService;
 import org.example.service.VectorIndexService;
 import org.slf4j.Logger;
@@ -36,8 +37,14 @@ public class FileUploadController {
     @Autowired
     private ImageCaptionService imageCaptionService;
 
+    @Autowired
+    private DocumentTextExtractor documentTextExtractor;
+
     /** 多模态白名单：/api/upload 收这些扩展名的图片 → Qwen-VL 看图出 Markdown → 入 RAG（application.yml 同步放行） */
     private static final Set<String> IMAGE_EXTENSIONS = Set.of("jpg", "jpeg", "png", "webp");
+
+    /** 原生文档白名单：pdf/docx/pptx → DocumentTextExtractor 抽文本 → 走与图片同一 indexParsedText 缝入 RAG（specs/004） */
+    private static final Set<String> DOC_EXTENSIONS = Set.of("pdf", "docx", "pptx");
 
     @PostMapping(value = "/api/upload", consumes = "multipart/form-data")
     public ResponseEntity<?> upload(@RequestParam("file") MultipartFile file) {
@@ -76,7 +83,7 @@ public class FileUploadController {
 
             logger.info("文件上传成功: {}", filePath);
 
-            // 文件上传成功后，自动建索引：图片 = 多模态新分支；txt/md = 原文本索引（语义不变）
+            // 文件上传成功后，自动建索引：图片/文档 = 解析出纯文本走 indexParsedText；txt/md = 原 indexSingleFile（语义不变）
             if (isImageExtension(fileExtension)) {
                 // 图片若解析/入库失败就没有任何内容可进库，假 200 会误导演示 → 诚实报 500（文件已落盘保留，便于排查）
                 try {
@@ -89,6 +96,21 @@ public class FileUploadController {
                     ApiResponse<String> errorResponse = new ApiResponse<>();
                     errorResponse.setCode(500);
                     errorResponse.setMessage("图片解析或入库失败: " + e.getMessage() + "（文件已保存，未入库）");
+                    return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
+                            .body(errorResponse);
+                }
+            } else if (isDocumentExtension(fileExtension)) {
+                // 文档同图片哲学：抽不出文本（如扫描件 PDF 无文字层）即无可入库，假 200 会误导演示 → 诚实报 500
+                try {
+                    byte[] docBytes = Files.readAllBytes(filePath);
+                    String text = documentTextExtractor.extract(originalFilename, fileExtension, docBytes);
+                    vectorIndexService.indexParsedText(filePath.toString(), text);
+                    logger.info("文档抽文本并索引成功: {}, 文本 {} 字符", filePath, text.length());
+                } catch (Exception e) {
+                    logger.error("文档解析/入库失败: {}, 错误: {}", filePath, e.getMessage(), e);
+                    ApiResponse<String> errorResponse = new ApiResponse<>();
+                    errorResponse.setCode(500);
+                    errorResponse.setMessage("文档解析或入库失败: " + e.getMessage() + "（文件已保存，未入库）");
                     return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                             .body(errorResponse);
                 }
@@ -162,6 +184,10 @@ public class FileUploadController {
 
     private boolean isImageExtension(String extension) {
         return IMAGE_EXTENSIONS.contains(extension);
+    }
+
+    private boolean isDocumentExtension(String extension) {
+        return DOC_EXTENSIONS.contains(extension);
     }
 
     private String imageMimeType(String extension) {
